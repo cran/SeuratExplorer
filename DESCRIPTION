@@ -1,0 +1,23 @@
+Package: SeuratExplorer
+Title: An 'Shiny' App for Exploring scRNA-seq Data Processed in
+        'Seurat'
+Version: 0.1.0
+Authors@R: 
+  person("Yongchao", "Zhang", , "zhangyongchao@nibs.ac.cn", role = c("aut", "cre"),
+           comment = c("https://github.com/fentouxungui"))
+Description: A simple, one-command package which runs an interactive dashboard capable of common visualizations for single cell RNA-seq. 'SeuratExplorer' requires a processed 'Seurat' object, which is saved as 'rds' or 'qs2' file.
+License: GPL (>= 3)
+Encoding: UTF-8
+RoxygenNote: 7.3.2
+Imports: ggplot2, utils, Seurat, shiny, shinydashboard, DT,
+        shinycssloaders, patchwork, tools, colourpicker, shinyWidgets,
+        scales, SeuratObject, shinyjqui, shinyBS, ggalluvial, dplyr,
+        ComplexHeatmap, qs2, circlize, reshape2, stats, htmltools
+Depends: R (>= 4.1.0)
+Suggests: BiocManager, DESeq2, MAST, roxygen2, devtools
+NeedsCompilation: no
+Packaged: 2025-03-12 00:05:21 UTC; Xi_Lab
+Author: Yongchao Zhang [aut, cre] (https://github.com/fentouxungui)
+Maintainer: Yongchao Zhang <zhangyongchao@nibs.ac.cn>
+Repository: CRAN
+Date/Publication: 2025-03-13 13:10:05 UTC
