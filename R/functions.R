@@ -12,9 +12,62 @@ prepare_seurat_object <- function(obj, verbose = FALSE){
   return(obj)
 }
 
+#' Helper function to join layers for Assay5 objects
+#' @param SeuratObj A Seurat object
+#' @param assay Assay name
+#' @return Seurat object with joined layers
+join_layers_if_needed <- function(SeuratObj, assay = 'RNA') {
+  if (class(SeuratObj[[assay]])[1] == "Assay5") {
+    SeuratObj <- JoinLayers(SeuratObj)
+  }
+  return(SeuratObj)
+}
+
+#' Helper function to extract counts matrix with proper handling
+#' @param SeuratObj A Seurat object
+#' @param assay Assay name
+#' @return A counts matrix
+get_counts_matrix <- function(SeuratObj, assay = 'RNA') {
+  SeuratObj <- join_layers_if_needed(SeuratObj, assay)
+  if (class(SeuratObj[[assay]])[1] == "Assay5") {
+    counts <- as.matrix(SeuratObj[[assay]]@layers$counts)
+  } else {
+    counts <- as.matrix(SeuratObj[[assay]]$counts)
+  }
+  rownames(counts) <- rownames(SeuratObj[[assay]])
+  colnames(counts) <- colnames(SeuratObj)
+  return(counts)
+}
+
+#' Helper function to extract data matrix with proper handling
+#' @param SeuratObj A Seurat object
+#' @param assay Assay name
+#' @return A data matrix
+get_data_matrix <- function(SeuratObj, assay = 'RNA') {
+  SeuratObj <- join_layers_if_needed(SeuratObj, assay)
+  if (class(SeuratObj[[assay]])[1] == "Assay5") {
+    data <- as.matrix(SeuratObj[[assay]]@layers$data)
+  } else {
+    data <- as.matrix(SeuratObj[[assay]]$data)
+  }
+  rownames(data) <- rownames(SeuratObj[[assay]])
+  colnames(data) <- colnames(SeuratObj)
+  return(data)
+}
+
+
 # Converts eligible non-factor columns to factor type, and converts strings that may be numbers to numbers.
 modify_columns_types <- function(df, types_to_check = c("numeric", "character"), unique_max_counts = 50, unique_max_percent = 0.05, verbose = FALSE){
+  # first, extract all columns in types_to_check types
   candidates.types.logic <- sapply(df, class) %in% types_to_check
+  # then, for factor columns, check the levels, level counts should less than (total cells) * 0.1, if not trans to character
+  factor_columns_names <- colnames(df)[sapply(df, class) %in% 'factor']
+  factor_columns_names_not_ok <- factor_columns_names[sapply(df[,factor_columns_names], function(x)length(levels(x))) > nrow(df) * 0.1]
+  if (length(factor_columns_names_not_ok) != 0) {
+    df[,factor_columns_names_not_ok] <- lapply(df[,factor_columns_names_not_ok], as.character)
+  }
+  # then for types_to_check types
+  # unique values counts should less than (total cells)*0.05, for 100 cells has 5 clusters at most. and for 10000 cells has 50 clusters at most.
   cutoff <- min(unique_max_counts, round(nrow(df) * unique_max_percent))
   candidates.unique.logic <- sapply(df, FUN = function(x)length(unique(x))) <= cutoff
   candidates.logic <- candidates.types.logic & candidates.unique.logic & !sapply(df, is.factor)
@@ -37,6 +90,31 @@ prepare_reduction_options <- function(obj, keywords = c("umap","tsne"), verbose 
   return(reduction.choice)
 }
 
+# get assay and slots info
+prepare_assays_slots <- function(obj, verbose = FALSE, data_slot =  c('counts', 'data', 'scale.data')){
+  requireNamespace("Seurat")
+  # assay at least has one slot of counts, data, scale.data
+  assay_slot_list <- list()
+  for (i in  Seurat::Assays(obj)) {
+    slot_names <- slotNames(obj[[i]])
+    if ('layers' %in% slot_names) {
+      slot_names <- Layers(obj[[i]])
+    }
+    slot_names <- data_slot[data_slot %in% slot_names]
+    if (length(slot_names) != 0) {
+      assay_slot_list[[i]] <- slot_names
+    }
+  }
+  if(verbose){message("SeuratExplorer: prepare_assays_slots runs successfully!")}
+  return(assay_slot_list)
+}
+
+prepare_assays_options <-function(Alist, verbose = FALSE){
+  assays.choice <- names(Alist)
+  names(assays.choice) <- toupper(assays.choice)
+  if(verbose){message("SeuratExplorer: prepare_assays_options runs successfully!")}
+  return(assays.choice)
+}
 
 # get cluster resolution options from all factor type columns in meta.data
 prepare_cluster_options <- function(df, verbose = FALSE){
@@ -45,6 +123,43 @@ prepare_cluster_options <- function(df, verbose = FALSE){
   if(verbose){message("SeuratExplorer: prepare_cluster_options runs successfully!")}
   return(cluster.options)
 }
+
+# get all genes or annotation from assays
+#' extract the features from row names or annotation slot of assays
+#'
+#' @param obj a Seurat object
+#' @param verbose whether output messages
+#'
+#' @importFrom methods slotNames is
+#' @return a list with data.frames
+#'
+#' @examples
+#' #NULL
+prepare_gene_annotations <- function(obj, verbose = FALSE){
+  anno_list <- list()
+  for (aassay in Assays(obj)) {
+    # the annotation in ATAC assay is not the real features of the assay! just annotations from genome.
+    # use ClosestFeature to annotate peaks/features from ATAC assay
+    if ('annotation' %in% slotNames(obj[[aassay]])) { # if exist annotation slot in assay
+      # Check if Signac is available
+      if (requireNamespace("Signac", quietly = TRUE)) {
+        anno_df <- Signac::ClosestFeature(obj[[aassay]], regions = rownames(obj[[aassay]]))
+        anno_list[[aassay]] <- anno_df
+      } else {
+        # If Signac is not available, fall back to using rownames
+        if (verbose) message("Signac package not found. Using rownames instead for assay: ", aassay)
+        anno_df <- data.frame(FeatureName = rownames(obj[[aassay]]))
+        anno_list[[aassay]] <- anno_df
+      }
+    }else{ # if not exist annotation slot, use all rownames
+      anno_df <- data.frame(FeatureName = rownames(obj[[aassay]]))
+      anno_list[[aassay]] <- anno_df
+    }
+  }
+  if(verbose){message("SeuratExplorer: prepare_gene_annotations runs successfully!")}
+  return(anno_list)
+}
+
 
 # get split options from eligible factor columns in meta.data which has less levels than max_level
 prepare_split_options <- function(df, max.level = 4, verbose = FALSE){
@@ -84,29 +199,6 @@ ReviseGene <- function(Agene, GeneLibrary){
   }
 }
 
-
-# # check R package for DEGs analysis
-# CRAN require: not use installed.packages()
-# check_dependency <- function(test){
-#   # >https://stackoverflow.com/questions/64737686/why-library-or-require-should-not-be-used-in-a-r-package
-#   # Why library() or require() should not be used in a R package
-#   if (test == "wilcox") {
-#     if(!"presto" %in% installed_packages){
-#       devtools::install_github('immunogenomics/presto', upgrade = "never")
-#       # requireNamespace("presto")
-#     }
-#   }else if(test %in% c("DESeq2","MAST")){
-#     if (!"BiocManager" %in% installed_packages)
-#       utils::install.packages("BiocManager")
-#       # requireNamespace("BiocManager")
-#     if (!test %in% installed_packages) {
-#       BiocManager::install(test, update = FALSE, ask = FALSE)
-#       # requireNamespace(test)
-#     }
-#   } else {
-#     stop("Please input a correct test method.")
-#   }
-# }
 
 color_list <- list(stallion = c("#D51F26","#272E6A","#208A42","#89288F","#F47D2B",
                                 "#FEE500","#8A9FD1","#C06CAB","#E6C2DC","#90D5E4",
@@ -209,6 +301,7 @@ color_list <- list(stallion = c("#D51F26","#272E6A","#208A42","#89288F","#F47D2B
 color_choice_vector <- names(color_list)
 names(color_choice_vector) <- paste(names(color_list), unlist(lapply(color_list,length)),sep = "-")
 color_choice_vector <- color_choice_vector[names(color_choice_vector)[order(unlist(lapply(color_list,length)),decreasing = TRUE)]]
+color_choice_vector <- c(c("Default" = 'default'), color_choice_vector)
 
 #' @title getColors
 #'
@@ -222,9 +315,13 @@ color_choice_vector <- color_choice_vector[names(color_choice_vector)[order(unli
 #' @examples
 #' # null
 getColors <- function(color.platte = NULL,
-                      choice = NULL,
+                      choice = 'default',
                       n = NULL){
-  return(color.platte[[choice]][1:n])
+  if (choice == 'default') { # use default colors
+    return(scales::hue_pal()(n))
+  }else{
+    return(color.platte[[choice]][1:n])
+  }
 }
 
 globalVariables(c("num"))
@@ -234,6 +331,7 @@ globalVariables(c("num"))
 #' support facet, codes refer to: https://github.com/junjunlab/scRNAtoolVis/blob/master/R/cellRatioPlot.R, with modification
 #'
 #' @param object an Seurat object
+#' @param idents idents used, default all idents
 #' @param sample.name x axis
 #' @param sample.order order for x axis
 #' @param celltype.name column fill by
@@ -252,6 +350,7 @@ globalVariables(c("num"))
 #' @examples
 #' #NULL
 cellRatioPlot <- function(object = NULL,
+                          idents = NULL,
                           sample.name = NULL,
                           sample.order = NULL,
                           celltype.name = NULL,
@@ -263,20 +362,44 @@ cellRatioPlot <- function(object = NULL,
                           flow.curve = 0,
                           color.choice = NULL) {
   requireNamespace("dplyr")
+  # Input validation
+  if (is.null(object)) stop("object cannot be NULL")
+  if (is.null(idents)) stop("idents cannot be NULL")
+  if (is.null(sample.name)) stop("sample.name cannot be NULL")
+  if (is.null(celltype.name)) stop("celltype.name cannot be NULL")
+  if (!sample.name %in% colnames(object@meta.data)) {
+    stop(paste("sample.name", sample.name, "not found in meta.data"))
+  }
+  if (!celltype.name %in% colnames(object@meta.data)) {
+    stop(paste("celltype.name", celltype.name, "not found in meta.data"))
+  }
+
   # get meta info
   meta <- object@meta.data
 
-  # order
+  # subset
+  meta <- meta[meta[,celltype.name] %in% idents,]
+
+  # Check if we have data left after subsetting
+  if (nrow(meta) == 0) {
+    stop("No cells match the provided idents")
+  }
+
+  # fill order | y order
+  if(!is.null(celltype.order)){
+    meta[,celltype.name] <- factor(meta[,celltype.name], levels = celltype.order)
+  }
+
+  # x order
   if(!is.null(sample.order)){
     meta[,sample.name] <- factor(meta[,sample.name], levels = sample.order)
   }
 
-  if(!is.null(celltype.order)){
-    meta[,celltype.name] <- factor(meta[,celltype.name], levels = celltype.order)
-  }
+   # facet order
   if(!is.null(facet.order)){
     meta[,facet.name] <- factor(meta[,facet.name], levels = facet.order)
   }
+
   # calculate percent ratio
   if (is.null(facet.name)) {
     ratio.info <- meta %>%
@@ -291,43 +414,26 @@ cellRatioPlot <- function(object = NULL,
   }
 
   # color
-  fill.col <- getColors(color.platte = color_list, choice = color.choice, n = length(unique(meta[, celltype.name])))
+  # fill.col <- getColors(color.platte = color_list, choice = color.choice, n = length(unique(meta[, celltype.name])))
+  fill.col <- getColors(color.platte = color_list, choice = color.choice, n = length(idents))
 
 
   # plot
-  p <-
-    ggplot2::ggplot(
-      ratio.info,
-      ggplot2::aes_string(x = sample.name, y = "rel_num")
-    ) +
-    ggplot2::geom_col(
-      ggplot2::aes_string(fill = celltype.name),
-      width = col.width
-    ) +
-    ggalluvial::geom_flow(
-      ggplot2::aes_string(
-        stratum = celltype.name,
-        alluvium = celltype.name,
-        fill = celltype.name
-      ),
+  p <- ggplot2::ggplot(ratio.info, ggplot2::aes_string(x = sample.name, y = "rel_num")) +
+    ggplot2::geom_col( ggplot2::aes_string(fill = celltype.name), width = col.width ) +
+    ggalluvial::geom_flow( ggplot2::aes_string( stratum = celltype.name, alluvium = celltype.name, fill = celltype.name ),
       width = col.width,
       alpha = flow.alpha,
-      knot.pos = flow.curve
-    ) +
+      knot.pos = flow.curve) +
     ggplot2::theme_bw() +
     ggplot2::coord_cartesian(expand = 0) +
     ggplot2::scale_y_continuous(labels = scales::label_percent()) +
-    ggplot2::scale_fill_manual(
-      values = fill.col,
-      name = "Cell Type"
-    ) +
-    ggplot2::theme(
-      panel.grid = ggplot2::element_blank(),
-      axis.text = ggplot2::element_text(size = ggplot2::rel(1.2), color = "black"),
-      axis.title = ggplot2::element_text(size = ggplot2::rel(1.5), color = "black"),
-      legend.text = ggplot2::element_text(size = ggplot2::rel(1.2), color = "black"),
-      legend.title = ggplot2::element_text(size = ggplot2::rel(1.5), color = "black")
-    ) +
+    ggplot2::scale_fill_manual(values = fill.col,name = "Cell Type") +
+    ggplot2::theme(panel.grid = ggplot2::element_blank(),
+                   axis.text = ggplot2::element_text(size = ggplot2::rel(1.2), color = "black"),
+                   axis.title = ggplot2::element_text(size = ggplot2::rel(1.5), color = "black"),
+                   legend.text = ggplot2::element_text(size = ggplot2::rel(1.2), color = "black"),
+                   legend.title = ggplot2::element_text(size = ggplot2::rel(1.5), color = "black")) +
     ggplot2::xlab("") +
     ggplot2::ylab("Cell percent ratio")
   if (!is.null(facet.name)) {
@@ -350,149 +456,185 @@ cellRatioPlot <- function(object = NULL,
 #'
 #'
 #' @param SeuratObj Seurat object
-#' @param expr.cut UMI percentage cutoff, in a cell, if a gene with UMIs ratio more than this cutoff, this gene will be assigned to highly expressed gene for this cell
+#' @param percent.cut UMI percentage cutoff, in a cell, if a gene with UMIs ratio more than this cutoff, this gene will be assigned to highly expressed gene for this cell
 #' @param group.by how to group cells
+#' @param assay which assay used
+#' @import dplyr Seurat SeuratObject
 #'
 #' @return a data frame
 #' @export
 #'
-top_genes <- function(SeuratObj, expr.cut = 0.01, group.by) {
-  requireNamespace("dplyr")
-  requireNamespace("Seurat")
-
+top_genes <- function(SeuratObj, percent.cut = 0.01, group.by, assay = 'RNA') {
   #> https://stackoverflow.com/questions/76242926/using-data-table-in-package-development-undefined-global-functions-or-variables
   # to block R RMD check note: Undefined global functions or variables:
   Gene <- NULL
   Expr <- NULL
+  DefaultAssay(SeuratObj) <- assay
 
-  # if type is assay5
-  if (class(SeuratObj@assays$RNA)[1] == "Assay5") {
-    SeuratObj <- JoinLayers(SeuratObj)
-    counts.expr <- as.matrix(SeuratObj@assays$RNA@layers$counts)
-  } else { # if type is assay
-    counts.expr <- as.matrix(SeuratObj@assays$RNA$counts)
-  }
-  colnames(counts.expr) <- colnames(SeuratObj)
-  rownames(counts.expr) <- rownames(SeuratObj)
-  # calculate by cell type
-  all.cell.types <- unique(SeuratObj@meta.data[,group.by])
-  for (celltype in all.cell.types) {
-    cells.sub <- colnames(SeuratObj)[as.character(SeuratObj@meta.data[,group.by]) == celltype]
-    if (length(cells.sub) < 3) {
-      next
+  # Use helper function to get counts matrix
+  counts.expr <- get_counts_matrix(SeuratObj, assay)
+
+  if (!is.null(group.by)) {
+    # calculate by cell type
+    all.cell.types <- unique(SeuratObj@meta.data[,group.by])
+    results.statics <- list()
+    for (celltype in all.cell.types) {
+      cells.sub <- colnames(SeuratObj)[as.character(SeuratObj@meta.data[,group.by]) == celltype]
+      if (length(cells.sub) < 3) {
+        next
+      }
+      results.statics[[celltype]] <- top_genes_core(expr_mat = counts.expr[,cells.sub], cutoff = percent.cut, celltype = celltype)
     }
-    counts.expr.sub <- counts.expr[,cells.sub]
-    for (i in 1:ncol(counts.expr.sub)) {
-      values <- sort(counts.expr.sub[, i], decreasing = TRUE)
-      rates <- values/sum(values)
-      top <- rates[rates > expr.cut]
-      if (i == 1) {
-        res <- data.frame(Gene = names(top), Expr = unname(top))
-      }else{
-        res <- rbind(res, data.frame(Gene = names(top), Expr = unname(top)))
+    results.statics <- Reduce(rbind, results.statics)
+  }else{
+    results.statics <- top_genes_core(expr_mat = counts.expr, cutoff = percent.cut, celltype = 'AllSelectedCells')
+  }
+  rownames(results.statics) <- NULL
+  return(results.statics)
+}
+
+top_genes_core <- function(expr_mat, cutoff = 0.01, celltype){
+  # to block R RMD check note: Undefined global functions or variables:
+  Expr <- NULL
+  Gene <- NULL
+
+  # Optimized version using matrix operations instead of loops
+  # Calculate total UMI per cell
+  cell_totals <- colSums(expr_mat)
+
+  # Find genes above cutoff for each cell using vectorized operations
+  gene_list <- list()
+  for (i in 1:ncol(expr_mat)) {
+    if (cell_totals[i] > 0) {
+      rates <- expr_mat[, i] / cell_totals[i]
+      top_genes_idx <- which(rates > cutoff)
+      if (length(top_genes_idx) > 0) {
+        gene_list[[i]] <- data.frame(
+          'Gene' = rownames(expr_mat)[top_genes_idx],
+          'Expr' = rates[top_genes_idx],
+          stringsAsFactors = FALSE
+        )
       }
     }
-    genes.statics <- dplyr::group_by(res, Gene) %>%
-      dplyr::summarise(cut.pct.mean = round(mean(Expr),digits = 4), cut.pct.median = round(stats::median(Expr),digits = 4), cut.Cells = length(Expr))
-    genes.statics$total.pos.cells <- apply(counts.expr.sub[genes.statics$Gene,,drop = FALSE] > 0, 1, sum)
-    genes.statics$total.UMI.pct <- round(apply(counts.expr.sub[genes.statics$Gene,,drop = FALSE], 1, sum)/sum(counts.expr),digits = 4)
-    genes.statics$total.cells <- ncol(counts.expr.sub)
-    genes.statics$celltype <- celltype
-    genes.statics <- genes.statics[,c("celltype", "total.cells", "Gene", "total.pos.cells", "total.UMI.pct", "cut.Cells", "cut.pct.mean", "cut.pct.median")]
-    genes.statics <- genes.statics[order(genes.statics$total.UMI.pct, decreasing = TRUE),]
-    if (celltype == all.cell.types[1]) {
-      results.statics <- genes.statics
-    }else{
-      results.statics <- rbind(results.statics, genes.statics)
+  }
+
+  if (length(gene_list) == 0) {
+    # Return empty data frame with correct structure
+    return(data.frame(
+      celltype = celltype,
+      total.cells = ncol(expr_mat),
+      Gene = character(0),
+      total.pos.cells = integer(0),
+      total.UMI.pct = numeric(0),
+      cut.Cells = integer(0),
+      cut.pct.mean = numeric(0),
+      cut.pct.median = numeric(0)
+    ))
+  }
+
+  res_cell_level <- do.call(rbind, gene_list)
+  genes.statics <- dplyr::group_by(res_cell_level, Gene) %>%
+    dplyr::summarise(cut.pct.mean = round(mean(Expr),digits = 4),
+                     cut.pct.median = round(stats::median(Expr),digits = 4),
+                     cut.Cells = length(Expr))
+  genes.statics$total.pos.cells <- apply(expr_mat[genes.statics$Gene,,drop = FALSE] > 0, 1, sum)
+  genes.statics$total.UMI.pct <- round(apply(expr_mat[genes.statics$Gene,,drop = FALSE], 1, sum)/sum(expr_mat),digits = 4)
+  genes.statics$total.cells <- ncol(expr_mat)
+  genes.statics$celltype <- celltype
+  genes.statics <- genes.statics[,c("celltype", "total.cells", "Gene", "total.pos.cells", "total.UMI.pct", "cut.Cells", "cut.pct.mean", "cut.pct.median")]
+  genes.statics <- genes.statics[order(genes.statics$total.UMI.pct, decreasing = TRUE),]
+  return(genes.statics)
+}
+
+
+top_accumulated_genes <- function(SeuratObj, top_n = 100, group.by, assay = 'RNA'){
+  requireNamespace("dplyr")
+  requireNamespace("Seurat")
+
+  # Use helper function to get counts matrix
+  counts.expr <- get_counts_matrix(SeuratObj, assay)
+
+  if (!is.null(group.by)) {
+    all.cell.types <- unique(SeuratObj@meta.data[,group.by])
+    all.cell.types <- all.cell.types[!is.na(all.cell.types)] # in case of some celltype has NA value
+    results.statics <- list()
+    for (celltype in all.cell.types) {
+      cells.sub <- Cells(SeuratObj)[(as.character(SeuratObj@meta.data[, group.by]) == as.character(celltype)) & !is.na(SeuratObj@meta.data[, group.by])] # some celltype has NA value
+      if (length(cells.sub) < 3) {
+        next
+      }
+      results.statics[[celltype]] <- top_accumulated_genes_core(expr_mat = counts.expr[,cells.sub,drop = FALSE], top_n = top_n, celltype = celltype)
     }
+    results.statics <- Reduce(rbind, results.statics)
+  }else{
+    results.statics <- top_accumulated_genes_core(expr_mat = counts.expr, top_n = top_n, celltype = 'AllSetectedCells')
   }
   rownames(results.statics) <- NULL
   return(results.statics)
 }
 
-top_accumulated_genes <- function(SeuratObj, top, group.by){
-  requireNamespace("dplyr")
-  requireNamespace("Seurat")
-  if (class(SeuratObj@assays$RNA)[1] == "Assay5") {
-    SeuratObj <- JoinLayers(SeuratObj)
-    counts.expr <- as.matrix(SeuratObj@assays$RNA@layers$counts)
-  } else {
-    counts.expr <- as.matrix(SeuratObj@assays$RNA$counts)
+top_accumulated_genes_core <- function(expr_mat, top_n, celltype){
+  expr_sum <- sort(apply(expr_mat, 1, sum),decreasing = TRUE)
+  if (length(expr_sum) > top_n) {
+    expr_sum <- expr_sum[1:top_n]
   }
-  colnames(counts.expr) <- colnames(SeuratObj)
-  rownames(counts.expr) <- rownames(SeuratObj)
-  all.cell.types <- unique(SeuratObj@meta.data[,group.by])
-  all.cell.types <- all.cell.types[!is.na(all.cell.types)] # in case of some celltype has NA value
-  for (celltype in all.cell.types) {
-    cells.sub <- Cells(SeuratObj)[(as.character(SeuratObj@meta.data[, group.by]) == as.character(celltype)) & !is.na(SeuratObj@meta.data[, group.by])] # 特殊情况，有些celltype中有NA值
-    if (length(cells.sub) < 3) {
-      next
-    }
-    counts.expr.sub <- counts.expr[,cells.sub,drop = FALSE]
-    sss <- sort(apply(counts.expr.sub, 1, sum),decreasing = TRUE)
-    if (length(sss) > top) {
-      sss <- sss[1:top]
-    }
-    res <- data.frame(Gene = names(sss), MeanUMICounts = unname(sss)/ncol(counts.expr.sub), PCT = round(unname(sss)/sum(counts.expr.sub),digits = 4))
-    res$total.pos.cells <- unname(apply(counts.expr.sub[res$Gene,,drop = FALSE] > 0, 1, sum))
-    res$total.cells <- ncol(counts.expr.sub)
-    res$celltype <- celltype
-    res <- res[,c("celltype", "total.cells", "Gene", "total.pos.cells", "MeanUMICounts", "PCT")]
-    res <- res[order(res$MeanUMICounts, decreasing = TRUE),]
-    if (celltype == all.cell.types[1]) {
-      results.statics <- res
-    }else{
-      results.statics <- rbind(results.statics, res)
-    }
-  }
-  rownames(results.statics) <- NULL
-  return(results.statics)
-}
-
-
-summary_features <- function(SeuratObj, features, group.by){
-  requireNamespace("dplyr")
-  requireNamespace("Seurat")
-  if (class(SeuratObj@assays$RNA)[1] == "Assay5") {
-    SeuratObj <- JoinLayers(SeuratObj)
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA@layers$data)
-  } else {
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA$data)
-  }
-  all.cell.types <- unique(SeuratObj@meta.data[,group.by])
-  for (celltype in all.cell.types) {
-    cells.sub <- colnames(SeuratObj)[as.character(SeuratObj@meta.data[,group.by]) == celltype]
-    if (length(cells.sub) < 3) {
-      next
-    }
-    normalized.expr.sub <- normalized.expr[,cells.sub]
-    mean.expr <- apply(normalized.expr.sub[features,,drop = FALSE], 1, mean)
-    median.expr <- apply(normalized.expr.sub[features,,drop = FALSE], 1, stats::median)
-    pct <- apply(normalized.expr.sub[features,,drop = FALSE] > 0, 1, mean)
-    single.res <- data.frame(Gene = features, Expr.mean = round(mean.expr,digits = 4), Expr.median = round(median.expr, digits = 4), PCT = round(pct,digits = 4))
-    single.res$CellType <- celltype
-    single.res$TotalCells <- ncol(normalized.expr.sub)
-    single.res <- single.res[,c("CellType", "TotalCells","Gene", "PCT", "Expr.mean", "Expr.median")]
-    rownames(single.res) <- NULL
-    if (celltype == all.cell.types[1]) {
-      res <- single.res
-    }else{
-      res <- rbind(res, single.res)
-    }
-  }
-  rownames(res) <- NULL
+  res <- data.frame(Gene = names(expr_sum), MeanUMICounts = round(unname(expr_sum)/ncol(expr_mat),digits = 4), PCT = round(unname(expr_sum)/sum(expr_mat),digits = 4))
+  res$total.pos.cells <- unname(apply(expr_mat[res$Gene,,drop = FALSE] > 0, 1, sum))
+  res$total.cells <- ncol(expr_mat)
+  res$celltype <- celltype
+  res <- res[,c("celltype", "total.cells", "Gene", "total.pos.cells", "MeanUMICounts", "PCT")]
+  res <- res[order(res$MeanUMICounts, decreasing = TRUE),]
   return(res)
 }
 
-calculate_top_correlations <- function(SeuratObj, method, top = 1000){
-  if (class(SeuratObj@assays$RNA)[1] == "Assay5") {
-    SeuratObj <- JoinLayers(SeuratObj)
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA@layers$data)
-  } else {
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA$data)
+summary_features <- function(SeuratObj, features, group.by, assay = 'RNA'){
+  requireNamespace("dplyr")
+  requireNamespace("Seurat")
+
+  # Use helper function to get data matrix
+  normalized.expr <- get_data_matrix(SeuratObj, assay)
+
+  if (!is.null(group.by)) {
+    all.cell.types <- unique(SeuratObj@meta.data[,group.by])
+    res <- list()
+    for (celltype in all.cell.types) {
+      cells.sub <- colnames(SeuratObj)[as.character(SeuratObj@meta.data[,group.by]) == celltype]
+      if (length(cells.sub) < 3) {
+        next
+      }
+      res[[celltype]] <- summary_features_core(expr_mat=normalized.expr[,cells.sub], features=features, group = celltype)
+    }
+    res <- Reduce(rbind, res)
+    rownames(res) <- NULL
+  }else{
+    res <- summary_features_core(expr_mat=normalized.expr, features=features, group = 'AllSelectedCells')
   }
-  # filter cells: remove genes with low expression, accumulated expression should more than 1/10 cell numbers.
-  normalized.expr <- normalized.expr[apply(normalized.expr, 1, sum) > 0.1 * ncol(SeuratObj),,drop = FALSE]
+  return(res)
+}
+
+
+summary_features_core <- function(expr_mat, features, group = 'merged'){
+  mean.expr <- apply(expr_mat[features,,drop = FALSE], 1, mean)
+  median.expr <- apply(expr_mat[features,,drop = FALSE], 1, stats::median)
+  pct <- apply(expr_mat[features,,drop = FALSE] > 0, 1, mean)
+  single.res <- data.frame(Gene = features, Expr.mean = round(mean.expr,digits = 4), Expr.median = round(median.expr, digits = 4), PCT = round(pct,digits = 4))
+  single.res$CellType <- group
+  single.res$TotalCells <- ncol(expr_mat)
+  single.res <- single.res[,c("CellType", "TotalCells","Gene", "PCT", "Expr.mean", "Expr.median")]
+  rownames(single.res) <- NULL
+  return(single.res)
+}
+
+
+
+calculate_top_correlations <- function(SeuratObj, method, top = 1000, assay = 'RNA'){
+  # Use helper function to get data matrix
+  normalized.expr <- get_data_matrix(SeuratObj, assay)
+
+  # Filter genes with low expression (mean expression > 0.1 across all cells)
+  # This is an important filter to reduce computation time
+  gene_means <- rowMeans(normalized.expr)
+  normalized.expr <- normalized.expr[gene_means > 0.1, , drop = FALSE]
   cor.res = stats::cor(t(as.matrix(normalized.expr)), method = method)
   cor.res[lower.tri(cor.res, diag = TRUE)] <- 0
   cor.res <- reshape2::melt(cor.res)
@@ -507,13 +649,10 @@ calculate_top_correlations <- function(SeuratObj, method, top = 1000){
   return(cor.res)
 }
 
-calculate_most_correlated <- function(SeuratObj, feature, method){
-  if (class(SeuratObj@assays$RNA)[1] == "Assay5") {
-    SeuratObj <- JoinLayers(SeuratObj)
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA@layers$data)
-  } else {
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA$data)
-  }
+calculate_most_correlated <- function(SeuratObj, feature, method, assay = 'RNA'){
+  # Use helper function to get data matrix
+  normalized.expr <- get_data_matrix(SeuratObj, assay)
+
   x <- normalized.expr[feature, ,drop = FALSE]
   y <- normalized.expr[rownames(normalized.expr)[rownames(normalized.expr) != feature],,drop = FALSE]
   # filter cells: remove genes with low expression, accumulated expression should more than 1/10 cell numbers.
@@ -527,13 +666,10 @@ calculate_most_correlated <- function(SeuratObj, feature, method){
   return(cor.res)
 }
 
-calculate_correlation <- function(SeuratObj, features, method){
-  if (class(SeuratObj@assays$RNA)[1] == "Assay5") {
-    SeuratObj <- JoinLayers(SeuratObj)
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA@layers$data)
-  } else {
-    normalized.expr <- as.matrix(SeuratObj@assays$RNA$data)
-  }
+calculate_correlation <- function(SeuratObj, features, method, assay = 'RNA'){
+  # Use helper function to get data matrix
+  normalized.expr <- get_data_matrix(SeuratObj, assay)
+
   normalized.expr <- normalized.expr[rownames(normalized.expr) %in% features,,drop = FALSE]
   # filter cells: remove genes with low expression, accumulated expression should more than 1/10 cell numbers.
   normalized.expr <- normalized.expr[apply(normalized.expr, 1, sum) > 0.1 * ncol(SeuratObj),,drop = FALSE]
@@ -578,36 +714,28 @@ AverageHeatmap <- function(
     cluster_rows = FALSE,
     gene.order = NULL,
     ...) {
-  # BiocManager::install("ComplexHeatmap")
   requireNamespace("ComplexHeatmap")
+
+  # Input validation
+  if (is.null(object)) stop("object cannot be NULL")
+  if (is.null(markerGene)) stop("markerGene cannot be NULL")
 
   # get cells mean gene expression
   # check Seurat version first
-  vr <- utils::compareVersion(as.character(utils::packageVersion("Seurat")),"5")
-  if(vr == 1){
-    mean_gene_exp <- as.matrix(
+  print(object)
+  print(group.by)
+  print(assays)
+  print(slot)
+  mean_gene_exp <- as.matrix(
       data.frame(
         Seurat::AverageExpression(object,
                                   features = markerGene,
                                   group.by = group.by,
                                   assays = assays,
                                   layer = slot
-        )
       )
     )
-  }else{
-    mean_gene_exp <- as.matrix(
-      data.frame(
-        Seurat::AverageExpression(object,
-                                  features = markerGene,
-                                  group.by = group.by,
-                                  assays = assays,
-                                  slot = slot
-        )
-      )
-    )
-  }
-
+  )
   colnames(mean_gene_exp) <- levels(Seurat::Idents(object))
 
   # Z-score
@@ -737,19 +865,63 @@ AverageHeatmap <- function(
 }
 
 readSeurat <- function(path, verbose = FALSE){
-  if(verbose){message("Reading in data...")}
+  if(verbose){message("SeuratExplorer: Reading in data...")}
   # read data
   if (tools::file_ext(path) == 'qs2') {
     seu_obj <- qs2::qs_read(path)
   }else(
     seu_obj <- readRDS(path)
   )
-  # check version
-  if (SeuratObject::Version(seu_obj) < utils::packageVersion('SeuratObject')) {
-    seu_obj <- SeuratObject::UpdateSeuratObject(seu_obj)
+  # update Seurat object
+  if (class(seu_obj)[[1]] == 'seurat') { # for very old version: seurat object
+    if(verbose){message('SeuratExplorer: prepare_seurat_object Update Seurat Object for very old versions!')}
+    seu_obj <- suppressMessages(SeuratObject::UpdateSeuratObject(seu_obj))
+  }else if(SeuratObject::Version(seu_obj) < utils::packageVersion('SeuratObject')) {
+    if(verbose){message('SeuratExplorer: Update Seurat Object for old versions!')}
+    seu_obj <- suppressMessages(SeuratObject::UpdateSeuratObject(seu_obj))
   }else{
-    if(verbose){message('Update Seurat Object escaped for it has been the latest version!')}
+    if(verbose){message('SeuratExplorer: Update Seurat Object escaped for it has been the latest version!')}
   }
   return(seu_obj)
 }
+
+
+# > SCT assay related bug:
+# https://github.com/satijalab/seurat/issues/8235; 2025.03.26, may be Seurat Package will solve this bug in future.
+# and: https://github.com/satijalab/seurat/pull/8203
+# this bug can affect 'FindAllMarkers' function.
+check_SCT_assay <- function(seu_obj){
+  if (DefaultAssay(seu_obj) == "SCT") {
+    if (length(seu_obj@assays$SCT@SCTModel.list) > 1) {
+      SCT_first_umiassay <- seu_obj@assays$SCT@SCTModel.list[[1]]@umi.assay
+      for (i in 2:length(seu_obj@assays$SCT@SCTModel.list)) {
+        methods::slot(object = seu_obj@assays$SCT@SCTModel.list[[i]], name="umi.assay") <- SCT_first_umiassay
+      }
+      seu_obj <- Seurat::PrepSCTFindMarkers(object = seu_obj)
+    }
+  }
+  return(seu_obj)
+}
+
+check_genes_error <- "None of the input genes can be found!"
+
+# for plot features related functions when none of the input features can be recognized
+empty_plot <- ggplot2::ggplot() +
+  ggplot2::annotate('text', x = 0, y = 0, label = 'Please input correct features!\n Unrecognized features will be removed automatically.\n You can check the features in "Search Features" page.\n Or at leaset select one cluster.', color = 'darkgrey', size = 6)  +
+  ggplot2::theme_bw() +
+  ggplot2::geom_blank() +
+  ggplot2::theme(axis.title = ggplot2::element_blank(),
+                 axis.text = ggplot2::element_blank(),
+                 axis.ticks = ggplot2::element_blank())
+
+
+
+check_allowed_chars <- function(text_string) {
+  # Returns TRUE if NO forbidden characters are found (meaning only allowed chars are present)
+  !grepl("[^a-zA-Z0-9_-]", text_string)
+}
+
+
+
+
 
