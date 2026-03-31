@@ -13,6 +13,7 @@
 #' @importFrom utils str
 #' @importFrom grDevices dev.off pdf
 #' @importFrom stats na.omit
+#' @importFrom shinyjs html runjs
 #' @export
 #' @return server side functions related to `explorer_sidebar_ui`
 #'
@@ -137,9 +138,42 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   do.call(tagList, c(output_dimension_reduction, output_resolution, output_assay))
 
   ############################# Dimension Reduction Plot
+  # Track resolution changes and whether order is ready
+  dimplot_resolution_state <- reactiveValues(
+    ready = FALSE,
+    current_resolution = NULL
+  )
+
+  # Update ready state when DimClusterOrder is ready
+  observe({
+    req(input$DimClusterResolution, input$DimClusterOrder)
+    req(input$DimClusterResolution %in% colnames(data$obj@meta.data))
+    # Check if order matches current resolution
+    expected_levels <- levels(data$obj@meta.data[,input$DimClusterResolution])
+    actual_order <- if (!is.null(input$DimClusterOrder) && length(input$DimClusterOrder) > 0) {
+      input$DimClusterOrder
+    } else {
+      NULL
+    }
+
+    # Order is ready if it's not null and contains expected cluster names (in any order)
+    # One possibility is that the two clusters have identical cluster levels. Could this have any consequences?
+    if (!is.null(actual_order) && identical(sort(actual_order), sort(expected_levels))) {
+      if (is.null(dimplot_resolution_state$current_resolution) || dimplot_resolution_state$current_resolution != input$DimClusterResolution) {
+        dimplot_resolution_state$current_resolution <- input$DimClusterResolution
+        dimplot_resolution_state$ready <- TRUE
+        if(verbose){message("SeuratExplorer: DimClusterOrder is now ready for resolution: ", input$DimClusterResolution)}
+      }
+    }
+  })
+
+
   # define Cluster order
   output$DimClusterOrder.UI <- renderUI({
+    req(input$DimClusterResolution %in% colnames(data$obj@meta.data))
     if(verbose){message("SeuratExplorer: preparing DimClusterOrder.UI...")}
+    # Mark as not ready when UI is being rebuilt
+    dimplot_resolution_state$ready <- FALSE
     shinyjqui::orderInput(inputId = 'DimClusterOrder',
                           label = 'Drag to order:',
                           items = levels(data$obj@meta.data[,input$DimClusterResolution]),
@@ -173,9 +207,26 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
+  # Safe cluster order reactive - waits for order to be ready
+  DimClusterOrder.Safe <- reactive({
+    req(input$DimClusterResolution)
+    req(dimplot_resolution_state$ready, "Waiting for cluster order to update...")
+
+    if (!is.null(input$DimClusterOrder) && length(input$DimClusterOrder) > 0) {
+      if(verbose){message("SeuratExplorer: DimClusterOrder.Safe using user order...")}
+      return(input$DimClusterOrder)
+    }
+
+    # Fallback to default levels
+    if(verbose){message("SeuratExplorer: DimClusterOrder.Safe using default levels...")}
+    levels(data$obj@meta.data[,input$DimClusterResolution])
+  })
+
   # define Cluster choice for highlight
   output$DimHighlightedClusters.UI <- renderUI({
     req(input$DimClusterResolution)
+    req(input$DimClusterResolution %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing DimHighlightedClusters.UI...")}
     shinyWidgets::pickerInput(inputId = "DimHighlightedClusters", label = "Highlight Clusters:",
                               choices = levels(data$obj@meta.data[,input$DimClusterResolution]),
@@ -186,20 +237,52 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                               multiple = TRUE)
   })
 
-  # Pixel (X) to Centimeter: 1 pixel (X)	= 0.0264583333 cm, if use this value,
-  # the picture is a little bit of small, unknown why.
-  px2cm <- 0.03
+  # Store the current plot dimensions
+  dimplot_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$dimplot_width, {
+    req(input$dimplot_width)
+    dimplot_dims$width <- input$dimplot_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$dimplot_height, {
+    req(input$dimplot_height)
+    dimplot_dims$height <- input$dimplot_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  output$dimplot_resizable_ui <- renderUI({
+    if (input$DimPlotMode) {
+      withSpinner(plotOutput("dimplot",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'dimplot', initial_width = 800, initial_height = 720)
+    }
+  })
+
+  output$dimplot_size_ui <- renderUI({
+    if (input$DimPlotMode) {
+      sliderInput("DimPlotHWRatio", label = "Adjust Height/Width Ratio", min = 0.1, max = 4, value = 0.9)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
 
   output$dimplot <- renderPlot({
-    req(input$DimSplit, input$DimClusterOrder, input$DimClusterResolution,
-        input$DimPlotHWRatio, data$obj, session$clientData$output_dimplot_width,
+    req(input$DimSplit,
+        input$DimClusterResolution,
+        data$obj,
         input$DimPointSize)
+    req(input$DimClusterResolution %in% colnames(data$obj@meta.data))
 
     if(verbose){
       message("SeuratExplorer: preparing dimplot...")
-      # message(paste("Current width:", session$clientData$output_dimplot_width)) # for debug use, init dimplot has double refresh!
     }
     cds <- data$obj # not a memory saving way
+
     # for highlight cells
     if (any(is.null(input$DimHighlightedClusters))) {
       dim_cells_highlighted <- NULL
@@ -207,7 +290,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
       dim_cells_highlighted <- colnames(cds)[cds@meta.data[,isolate(input$DimClusterResolution)] %in% input$DimHighlightedClusters]
     }
     cds@meta.data[,isolate(input$DimClusterResolution)] <- factor(cds@meta.data[,isolate(input$DimClusterResolution)],
-                                                         levels = input$DimClusterOrder)
+                                                         levels = DimClusterOrder.Safe())
     if (is.null(DimSplit.Revised())) { # not splited
       p <- Seurat::DimPlot(cds,
                            reduction = input$DimDimensionReduction,
@@ -229,14 +312,31 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     if(!input$DimShowLegend){
       p <- p & NoLegend()
     }
-    ggplot2::ggsave(paste0(temp_dir,"/dimplot.pdf"),
-                    p,
-                    width = session$clientData$output_dimplot_width * px2cm,
-                    height = session$clientData$output_dimplot_width * input$DimPlotHWRatio * px2cm,
-                    units = "cm",
-                    limitsize = FALSE)
+    if (input$DimPlotMode) {
+      ggplot2::ggsave(paste0(temp_dir,"/dimplot.pdf"),
+                      p,
+                      width = session$clientData$output_dimplot_width,
+                      height = session$clientData$output_dimplot_width * input$DimPlotHWRatio,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }else{
+      ggplot2::ggsave(paste0(temp_dir,"/dimplot.pdf"),
+                      p,
+                      width = dimplot_dims$width,
+                      height = dimplot_dims$height,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }
     return(p)
-  }, height = function(){session$clientData$output_dimplot_width * input$DimPlotHWRatio})
+  }, height = function(){
+    if (input$DimPlotMode) {
+      session$clientData$output_dimplot_width * input$DimPlotHWRatio
+    }else{
+      if (is.null(dimplot_dims$height)) 720 else dimplot_dims$height
+    }
+  })
   # box plot: height = width default
 
   # refer to: https://stackoverflow.com/questions/14810409/how-to-save-plots-that-are-made-in-a-shiny-app
@@ -268,11 +368,9 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   # inform extra qc options for Gene symbol input
   output$Featurehints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing Featurehints.UI...")}
-    helpText(strong(paste("Also supports: ",
-                          paste(data$extra_qc_options, collapse = " "), ".",
-                          sep = "")),
-             br(),
-             strong("Tips: You can paste multiple genes from a column in excel."),style = "font-size:12px;")
+    p(paste0("Tips: also supports ", paste(data$extra_qc_options, collapse = " "),
+            "; you can paste multiple genes from a column in excel."),
+      style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
 
@@ -309,6 +407,40 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   #     features_dimplot$features_current <- features_input
   #   }
   # })
+
+  # Store the current plot dimensions
+  featureplot_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$featureplot_width, {
+    req(input$featureplot_width)
+    featureplot_dims$width <- input$featureplot_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$featureplot_height, {
+    req(input$featureplot_height)
+    featureplot_dims$height <- input$featureplot_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  output$featureplot_resizable_ui <- renderUI({
+    if (input$FeaturePlotMode) {
+      withSpinner(plotOutput("featureplot",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'featureplot', initial_width = 800, initial_height = 720)
+    }
+  })
+
+  output$featureplot_size_ui <- renderUI({
+    if (input$FeaturePlotMode) {
+      sliderInput("FeaturePlotHWRatio", label = "Adjust Height/Width Ratio", min = 0.1, max = 4, value = 0.9)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
 
   output$featureplot <- renderPlot({
     req(input$FeatureSlot)
@@ -359,34 +491,74 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                    alpha = input$FeaturePointAlpha,
                                    min.cutoff = expr_min_cutoff,
                                    max.cutoff = expr_max_cutoff)
-          if (length( features_dimplot$features_current) == 1) { # only one gene
-            plot_numbers <- length(levels(cds@meta.data[,FeatureSplit.Revised()]))
-            p <- p + patchwork::plot_layout(ncol = ceiling(sqrt(plot_numbers)),
-                                            nrow = ceiling(plot_numbers/ceiling(sqrt(plot_numbers))))
-          }
         }
       }
     }
-    ggplot2::ggsave(paste0(temp_dir,"/featureplot.pdf"),
-                    p,
-                    width = session$clientData$output_featureplot_width * px2cm,
-                    height = session$clientData$output_featureplot_width * input$FeaturePlotHWRatio * px2cm,
-                    units = "cm",
-                    limitsize = FALSE)
+    if (input$FeaturePlotMode) {
+      ggplot2::ggsave(paste0(temp_dir,"/featureplot.pdf"),
+                      p,
+                      width = session$clientData$output_featureplot_width,
+                      height = session$clientData$output_featureplot_width * input$FeaturePlotHWRatio,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }else{
+      ggplot2::ggsave(paste0(temp_dir,"/featureplot.pdf"),
+                      p,
+                      width = featureplot_dims$width,
+                      height = featureplot_dims$height,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }
     return(p)
-  }, height = function(){session$clientData$output_featureplot_width * input$FeaturePlotHWRatio})
-  # box plot: height = width default
-
+  }, height = function(){
+    if (input$FeaturePlotMode) {
+      session$clientData$output_featureplot_width * input$FeaturePlotHWRatio
+    }else{
+      if (is.null(featureplot_dims$height)) 720 else featureplot_dims$height
+    }
+  })
 
   output$downloadfeatureplot <- downloadHandler(
     filename = function(){'featureplot.pdf'},
     content = function(file) {
-      if (file.exists(paste0(temp_dir,"/featureplot.pdf"))) { # problem: will throw an error when file not exists; or with a uncorrected input, will download the pic of previous corrected input.
+      if (file.exists(paste0(temp_dir,"/featureplot.pdf"))) {
+        # problem: will throw an error when file not exists; or with a uncorrected input, will download the pic of previous corrected input.
         file.copy(paste0(temp_dir,"/featureplot.pdf"), file, overwrite=TRUE)
       }
     })
 
   ################################ Violin Plot
+  # Track ClustersSelected changes and whether order is ready
+  vlnplot_clustersselectd_state <- reactiveValues(
+    ready = FALSE,
+    current_ClustersSelectd = NULL
+  )
+
+  # Update ready state when VlnClusterOrder is ready
+  observe({
+    req(input$VlnIdentsSelected, input$VlnClusterOrder)
+    # Check if order matches current clusters selected
+    actual_order <- if (!is.null(input$VlnClusterOrder) && length(input$VlnClusterOrder) > 0) {
+      input$VlnClusterOrder
+    } else {
+      NULL
+    }
+
+    # Order is ready if it's not null and contains expected cluster names (in any order)
+    # One possibility is that the two clusters have identical cluster levels. Could this have any consequences?
+    if (!is.null(actual_order) &&
+        !is.null(input$VlnIdentsSelected) &&
+        identical(sort(input$VlnIdentsSelected),sort(actual_order))) {
+      if (is.null(vlnplot_clustersselectd_state$VlnIdentsSelected) || vlnplot_clustersselectd_state$current_ClustersSelectd != input$VlnIdentsSelected) {
+        vlnplot_clustersselectd_state$current_ClustersSelectd <- input$VlnIdentsSelected
+        vlnplot_clustersselectd_state$ready <- TRUE
+        if(verbose){message("SeuratExplorer: VlnClusterOrder is now ready for clusters selected: ", input$VlnIdentsSelected)}
+      }
+    }
+  })
+
   # define slot Choice UI
   output$VlnAssaySlots.UI <- renderUI({
     req(input$VlnAssay)
@@ -412,19 +584,18 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
+  # inform extra qc options for Gene symbol input
   output$Vlnhints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing Vlnhints.UI...")}
-    helpText(strong(paste("Also supports: ",
-                          paste(data$extra_qc_options, collapse = " "),
-                          ".",
-                          sep = "")),
-             br(),
-             strong("Tips: You can paste multiple genes from a column in excel."),style = "font-size:12px;")
+    p(paste0("Tips: also supports ", paste(data$extra_qc_options, collapse = " "),
+             "; you can paste multiple genes from a column in excel."),
+      style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
   # define the idents used
   output$VlnIdentsSelected.UI <- renderUI({
     req(input$VlnClusterResolution)
+    req(input$VlnClusterResolution %in% colnames(data$obj@meta.data))
     if(verbose){message("SeuratExplorer: preparing VlnIdentsSelected.UI...")}
     shinyWidgets::pickerInput(inputId = "VlnIdentsSelected", label = "Clusters Used:",
                               choices = levels(data$obj@meta.data[,input$VlnClusterResolution]),
@@ -440,7 +611,6 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     if(verbose){message("SeuratExplorer: preparing VlnClusterOrder.UI...")}
     shinyjqui::orderInput(inputId = 'VlnClusterOrder',
                           label = 'Drag to order:',
-                          # items = levels(data$obj@meta.data[,input$VlnClusterResolution]),
                           items = input$VlnIdentsSelected,
                           width = '100%')
   })
@@ -451,7 +621,18 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     shinyBS::updateCollapse(session, "collapseVlnplot", open = "0")
   })
 
+  # Safe cluster order reactive - waits for order to be ready
+  VlnClusterOrder.Safe <- reactive({
+    req(vlnplot_clustersselectd_state$ready, "Waiting for input$VlnIdentsSelected to update...")
+    if (!is.null(input$VlnClusterOrder) && length(input$VlnClusterOrder) > 0) {
+      if(verbose){message("SeuratExplorer: VlnClusterOrder.Safe using user order...")}
+      return(input$VlnClusterOrder)
+    }
 
+    # Fallback to default levels
+    if(verbose){message("SeuratExplorer: VlnClusterOrder.Safe using default levels...")}
+    input$VlnIdentsSelected
+  })
 
   # define Split Choice UI
   output$VlnSplitBy.UI <- renderUI({
@@ -459,10 +640,11 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     selectInput("VlnSplitBy","Split by:", choices = c("None" = "None", data$split_options))
   })
 
-
   # Conditional panel: show this panel when split.by is selected and the the level equals to 2
   output$Vlnplot_splitoption_twolevels = reactive({
     req(input$VlnSplitBy)
+    req(input$VlnSplitBy == "None" | input$VlnSplitBy %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing Vlnplot_splitoption_twolevels...")}
     if (input$VlnSplitBy == "None"){
       return(FALSE)
@@ -543,19 +725,56 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   # Run `rlang::last_trace()` to see where the error occurred
   # not related to ggplot2, pathcwork, rlang versions
 
-  # vlnplot_width  <- reactive({ session$clientData$output_vlnplot_width })
+  # Store the current plot dimensions
+  vlnplot_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$vlnplot_width, {
+    req(input$vlnplot_width)
+    vlnplot_dims$width <- input$vlnplot_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$vlnplot_height, {
+    req(input$vlnplot_height)
+    vlnplot_dims$height <- input$vlnplot_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  output$vlnplot_resizable_ui <- renderUI({
+    if (input$VlnPlotMode) {
+      withSpinner(plotOutput("vlnplot",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'vlnplot')
+    }
+  })
+
+  output$vlnplot_size_ui <- renderUI({
+    if (input$VlnPlotMode) {
+      sliderInput("VlnPlotHWRatio", label = "Adjust Height/Width Ratio", min = 0.1, max = 4, value = 0.9)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
 
   output$vlnplot <- renderPlot({
+    req(input$VlnSlot)
+    req(input$VlnClusterResolution %in% colnames(data$obj@meta.data))
+    req(all(input$VlnIdentsSelected %in% levels(data$obj@meta.data[,input$VlnClusterResolution])))
+
     if(verbose){message("SeuratExplorer: preparing vlnplot...")}
     if (any(is.na(features_vlnplot$features_current))) { # when NA value
       p <- empty_plot # when no symbol or wrong input, show a blank pic.
     }else{
       cds <- data$obj
-      cds@meta.data[,isolate(input$VlnClusterResolution)] <- factor(cds@meta.data[,isolate(input$VlnClusterResolution)],
-                                                           levels = input$VlnClusterOrder)
       SeuratObject::Idents(cds) <- isolate(input$VlnClusterResolution)
+      cds <- subset_Seurat(cds, idents = isolate(input$VlnIdentsSelected))
+      SeuratObject::Idents(cds) <- factor(SeuratObject::Idents(cds), levels = VlnClusterOrder.Safe())
+
       # check gene again, if all the input symbols not exist in the selected assay, specially case: when switch assay!
-      if((!any(features_vlnplot$features_current %in% c(rownames(cds[[input$VlnAssay]]),data$extra_qc_options))) | is.null(input$VlnClusterOrder)){
+      if((!any(features_vlnplot$features_current %in% c(rownames(cds[[input$VlnAssay]]),data$extra_qc_options))) | is.null(VlnClusterOrder.Safe())){
         p <- empty_plot
       }else{
         if(length(features_vlnplot$features_current) == 1) { # only One Gene
@@ -566,8 +785,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                split.by = VlnSplit.Revised(),
                                split.plot = input$VlnSplitPlot,
                                pt.size = input$VlnPointSize,
-                               alpha = input$VlnPointAlpha,
-                               idents = input$VlnClusterOrder) &
+                               alpha = input$VlnPointAlpha) &
             ggplot2::theme(axis.text.x = ggplot2::element_text(size = input$VlnXlabelSize),
                            axis.text.y = ggplot2::element_text(size = input$VlnYlabelSize))
         }else{ # multiple genes
@@ -580,7 +798,6 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                stack = input$VlnStackPlot,
                                flip = input$VlnFlipPlot,
                                fill.by = input$VlnFillBy,
-                               idents = input$VlnClusterOrder,
                                pt.size = input$VlnPointSize,
                                alpha = input$VlnPointAlpha) &
             ggplot2::theme(axis.text.x = ggplot2::element_text(size = input$VlnXlabelSize),
@@ -596,16 +813,31 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
         }
       }
     }
-    ggplot2::ggsave(paste0(temp_dir,"/vlnplot.pdf"),
-                    p,
-                    width = session$clientData$output_vlnplot_width * px2cm,
-                    height = session$clientData$output_vlnplot_width * input$VlnPlotHWRatio * px2cm,
-                    units = "cm",
-                    limitsize = FALSE)
+    if (input$VlnPlotMode) {
+      ggplot2::ggsave(paste0(temp_dir,"/vlnplot.pdf"),
+                      p,
+                      width = session$clientData$output_vlnplot_width,
+                      height = session$clientData$output_vlnplot_width * input$VlnPlotHWRatio,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }else{
+      ggplot2::ggsave(paste0(temp_dir,"/vlnplot.pdf"),
+                      p,
+                      width = vlnplot_dims$width,
+                      height = vlnplot_dims$height,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }
     return(p)
-  }, height = function(){session$clientData$output_vlnplot_width * input$VlnPlotHWRatio})
-  # box plot: height = width default
-
+  }, height = function(){
+    if (input$VlnPlotMode) {
+      session$clientData$output_vlnplot_width * input$VlnPlotHWRatio
+    }else{
+      if (is.null(vlnplot_dims$height)) 720 else vlnplot_dims$height
+    }
+  })
 
   output$downloadvlnplot <- downloadHandler(
     filename = function(){'vlnplot.pdf'},
@@ -615,8 +847,36 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
       }
     })
 
-
   ################################ Dot Plot
+  # Track ClustersSelected changes and whether order is ready
+  dotplot_clustersselectd_state <- reactiveValues(
+    ready = FALSE,
+    current_ClustersSelectd = NULL
+  )
+
+  # Update ready state when DotClusterOrder is ready
+  observe({
+    req(input$DotIdentsSelected, input$DotClusterOrder)
+    # Check if order matches current clusters selected
+    actual_order <- if (!is.null(input$DotClusterOrder) && length(input$DotClusterOrder) > 0) {
+      input$DotClusterOrder
+    } else {
+      NULL
+    }
+
+    # Order is ready if it's not null and contains expected cluster names (in any order)
+    # One possibility is that the two clusters have identical cluster levels. Could this have any consequences?
+    if (!is.null(actual_order) &&
+        !is.null(input$DotIdentsSelected) &&
+        identical(sort(input$DotIdentsSelected),sort(actual_order))) {
+      if (is.null(dotplot_clustersselectd_state$DotIdentsSelected) || dotplot_clustersselectd_state$current_ClustersSelectd != input$DotIdentsSelected) {
+        dotplot_clustersselectd_state$current_ClustersSelectd <- input$DotIdentsSelected
+        dotplot_clustersselectd_state$ready <- TRUE
+        if(verbose){message("SeuratExplorer: DotClusterOrder is now ready for clusters selected: ", input$DotIdentsSelected)}
+      }
+    }
+  })
+
   # only render plot when the inputs are really changed
   features_dotplot <- reactiveValues(features_current = NA, features_last = NA)
 
@@ -629,16 +889,18 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
-
+  # inform extra qc options for Gene symbol input
   output$Dothints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing Dothints.UI...")}
-    helpText(strong("Tips: You can paste multiple genes from a column in excel."),
-             style = "font-size:12px;")
+    p(paste0("Tips: You can paste multiple genes from a column in excel."),
+      style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
   # define the idents used
   output$DotIdentsSelected.UI <- renderUI({
     req(input$DotClusterResolution)
+    req(input$DotClusterResolution %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing DotIdentsSelected.UI...")}
     shinyWidgets::pickerInput(inputId = "DotIdentsSelected", label = "Clusters Used:",
                               choices = levels(data$obj@meta.data[,input$DotClusterResolution]),
@@ -695,27 +957,76 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
+  # Safe cluster order reactive - waits for order to be ready
+  DotClusterOrder.Safe <- reactive({
+    req(dotplot_clustersselectd_state$ready, "Waiting for input$DotIdentsSelected to update...")
+    if (!is.null(input$DotClusterOrder) && length(input$DotClusterOrder) > 0) {
+      if(verbose){message("SeuratExplorer: DotClusterOrder.Safe using user order...")}
+      return(input$DotClusterOrder)
+    }
+
+    # Fallback to default levels
+    if(verbose){message("SeuratExplorer: DotClusterOrder.Safe using default levels...")}
+    input$DotIdentsSelected
+  })
+
   outputOptions(output, 'DotPlot_Split_isNone', suspendWhenHidden = FALSE)
 
+  # Store the current plot dimensions
+  dotplot_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$dotplot_width, {
+    req(input$dotplot_width)
+    dotplot_dims$width <- input$dotplot_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$dotplot_height, {
+    req(input$dotplot_height)
+    dotplot_dims$height <- input$dotplot_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  output$dotplot_resizable_ui <- renderUI({
+    if (input$DotPlotMode) {
+      withSpinner(plotOutput("dotplot",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'dotplot', initial_width = 800, initial_height = 720)
+    }
+  })
+
+  output$dotplot_size_ui <- renderUI({
+    if (input$DotPlotMode) {
+      sliderInput("DotPlotHWRatio", label = "Adjust Height/Width Ratio", min = 0.1, max = 4, value = 0.9)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
+
   output$dotplot <- renderPlot({
+    req(input$DotClusterResolution %in% colnames(data$obj@meta.data))
+    req(all(input$DotIdentsSelected %in% levels(data$obj@meta.data[,input$DotClusterResolution])))
+    req(input$DotAssay)
+    req(all(DotClusterOrder.Safe() %in% levels(data$obj@meta.data[,input$DotClusterResolution])))
+
     if(verbose){message("SeuratExplorer: preparing dotplot...")}
-    if (any(is.na(features_dotplot$features_current)) | is.null(input$DotClusterOrder)) { # NA
+    if (any(is.na(features_dotplot$features_current)) | is.null(DotClusterOrder.Safe())) { # NA
       p <- empty_plot # when no symbol or wrong input, show a blank pic.
     }else{
       cds <- data$obj
       DefaultAssay(cds) <- input$DotAssay
       Idents(cds) <- isolate(input$DotClusterResolution)
-      cds <- subset_Seurat(cds, idents = input$DotClusterOrder)
-      Idents(cds) <- factor(Idents(cds), levels = input$DotClusterOrder)
+      cds <- subset_Seurat(cds, idents = DotClusterOrder.Safe())
+      Idents(cds) <- factor(Idents(cds), levels = DotClusterOrder.Safe())
       if(!any(features_dotplot$features_current %in% rownames(cds[[input$DotAssay]]))){
         p <- empty_plot
       }else{
         if (is.null(DotSplit.Revised())) {
           p <- Seurat::DotPlot(cds,
                                features = features_dotplot$features_current,
-                               # Seurat::DotPlot函数，可以支持先使用idents参数基于Idents(cds)subset cells，
-                               # 然后基于 group.by参数，可用另外一个分群来分组细胞。这里未使用此功能
-                               # group.by = isolate(input$DotClusterResolution),
                                idents = isolate(input$DotIdentsSelected),
                                split.by = DotSplit.Revised(),
                                cluster.idents = input$DotClusterIdents,
@@ -738,16 +1049,33 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
         if (input$DotFlipCoordinate) { p <- p + ggplot2::coord_flip() }
       }
     }
-    ggplot2::ggsave(paste0(temp_dir,"/dotplot.pdf"),
-                    p,
-                    width = session$clientData$output_dotplot_width * px2cm,
-                    height = session$clientData$output_dotplot_width * input$DotPlotHWRatio * px2cm,
-                    units = "cm",
-                    limitsize = FALSE)
-    return(p)
-  }, height = function(){session$clientData$output_dotplot_width * input$DotPlotHWRatio})
-  # box plot: height = width default
+    if (input$DotPlotMode) {
+      ggplot2::ggsave(paste0(temp_dir,"/dotplot.pdf"),
+                      p,
+                      width = session$clientData$output_dotplot_width,
+                      height = session$clientData$output_dotplot_width * input$DotPlotHWRatio,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }else{
+      ggplot2::ggsave(paste0(temp_dir,"/dotplot.pdf"),
+                      p,
+                      width = dotplot_dims$width,
+                      height = dotplot_dims$height,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }
 
+    return(p)
+  }, height = function(){
+    if (input$DotPlotMode) {
+      session$clientData$output_dotplot_width * input$DotPlotHWRatio
+    }else{
+      if (is.null(dotplot_dims$height)) 720 else dotplot_dims$height
+    }
+  }
+  )
 
   output$downloaddotplot <- downloadHandler(
     filename = function(){'dotplot.pdf'},
@@ -756,8 +1084,46 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
         file.copy(paste0(temp_dir,"/dotplot.pdf"), file, overwrite=TRUE)
       }
     })
+  # known bugs:
+  # when split by is selected, change cluster order not work!
 
   ################################ Heatmap Cell Level
+  # Track ClustersSelected changes and whether order is ready
+  heatmap_clustersselectd_state <- reactiveValues(
+    ready = FALSE,
+    current_ClustersSelectd = NULL
+  )
+
+  # Update ready state when HeatmapClusterOrder is ready
+  observe({
+    req(input$HeatmapIdentsSelected, input$HeatmapClusterOrder)
+    # Check if order matches current clusters selected
+    actual_order <- if (!is.null(input$HeatmapClusterOrder) && length(input$HeatmapClusterOrder) > 0) {
+      input$HeatmapClusterOrder
+    } else {
+      NULL
+    }
+
+    # Order is ready if it's not null and contains expected cluster names (in any order)
+    # One possibility is that the two clusters have identical cluster levels. Could this have any consequences?
+    if (!is.null(actual_order) &&
+        !is.null(input$HeatmapIdentsSelected) &&
+        identical(sort(input$HeatmapIdentsSelected),sort(actual_order))) {
+      if (is.null(heatmap_clustersselectd_state$HeatmapIdentsSelected) || heatmap_clustersselectd_state$current_ClustersSelectd != input$HeatmapIdentsSelected) {
+        heatmap_clustersselectd_state$current_ClustersSelectd <- input$HeatmapIdentsSelected
+        heatmap_clustersselectd_state$ready <- TRUE
+        if(verbose){message("SeuratExplorer: HeatmapClusterOrder is now ready for clusters selected: ", input$HeatmapIdentsSelected)}
+      }
+    }
+  })
+
+  # inform extra qc options for Gene symbol input
+  output$Heatmaphints.UI <- renderUI({
+    if(verbose){message("SeuratExplorer: preparing Heatmaphints.UI...")}
+    p(paste0("Tips: You can paste multiple genes from a column in excel."),
+      style = "font-size: 12px; margin: 0; color: #004085;")
+  })
+
   # define slot Choice UI
   output$HeatmapAssaySlots.UI <- renderUI({
     req(input$HeatmapAssay)
@@ -783,15 +1149,11 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
-  output$Heatmaphints.UI <- renderUI({
-    if(verbose){message("SeuratExplorer: preparing Heatmaphints.UI...")}
-    helpText(strong("Tips: You can paste multiple genes from a column in excel."),
-             style = "font-size:12px;")
-  })
-
     # define the idents used
   output$HeatmapIdentsSelected.UI <- renderUI({
     req(input$HeatmapClusterResolution)
+    req(input$HeatmapClusterResolution %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing HeatmapIdentsSelected.UI...")}
     shinyWidgets::pickerInput(inputId = "HeatmapIdentsSelected", label = "Clusters Used:",
                               choices = levels(data$obj@meta.data[,input$HeatmapClusterResolution]),
@@ -811,22 +1173,71 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                           width = '100%')
   })
 
-
-
   observeEvent(input$HeatmapClusterResolution, ({
     if(verbose){message("SeuratExplorer: updateCollapse for collapseHeatmap...")}
     shinyBS::updateCollapse(session, "collapseHeatmap", open = "0")
   }))
 
+  # Safe cluster order reactive - waits for order to be ready
+  HeatmapClusterOrder.Safe <- reactive({
+    req(heatmap_clustersselectd_state$ready, "Waiting for input$HeatmapIdentsSelected to update...")
+    if (!is.null(input$HeatmapClusterOrder) && length(input$HeatmapClusterOrder) > 0) {
+      if(verbose){message("SeuratExplorer: HeatmapClusterOrder.Safe using user order...")}
+      return(input$HeatmapClusterOrder)
+    }
+
+    # Fallback to default levels
+    if(verbose){message("SeuratExplorer: HeatmapClusterOrder.Safe using default levels...")}
+    input$HeatmapIdentsSelected
+  })
+
+  # Store the current plot dimensions
+  heatmap_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$heatmap_width, {
+    req(input$heatmap_width)
+    heatmap_dims$width <- input$heatmap_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$heatmap_height, {
+    req(input$heatmap_height)
+    heatmap_dims$height <- input$heatmap_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  output$heatmap_resizable_ui <- renderUI({
+    if (input$HeatmapPlotMode) {
+      withSpinner(plotOutput("heatmap",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'heatmap', initial_width = 800, initial_height = 720)
+    }
+  })
+
+  output$heatmap_size_ui <- renderUI({
+    if (input$HeatmapPlotMode) {
+      sliderInput("HeatmapPlotHWRatio", label = "Adjust Height/Width Ratio:", min = 0.1, max = 4, value = 0.9, step = 0.1)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
+
   output$heatmap <- renderPlot({
+    req(input$HeatmapClusterResolution %in% colnames(data$obj@meta.data))
+    req(input$HeatmapSlot)
+    req(all(HeatmapClusterOrder.Safe() %in% levels(data$obj@meta.data[,input$HeatmapClusterResolution])))
+
     if(verbose){message("SeuratExplorer: preparing heatmap...")}
-    if (any(is.na(features_heatmap$features_current)) | is.null(input$HeatmapClusterOrder)) { # NA
+    if (any(is.na(features_heatmap$features_current)) | is.null(HeatmapClusterOrder.Safe())) { # NA
       p <- empty_plot # when no symbol or wrong input, show a blank pic.
     }else{
       cds <- data$obj
       Idents(cds) <- isolate(input$HeatmapClusterResolution)
-      cds <- subset_Seurat(cds, idents = input$HeatmapClusterOrder)
-      Idents(cds) <- factor(Idents(cds), levels = input$HeatmapClusterOrder)
+      cds <- subset_Seurat(cds, idents = HeatmapClusterOrder.Safe())
+      Idents(cds) <- factor(Idents(cds), levels = HeatmapClusterOrder.Safe())
       # check gene again, if all the input symbols not exist in the selected assay, specially case: when switch assay!
       if(!any(features_heatmap$features_current %in% rownames(cds[[input$HeatmapAssay]]))){
         p <- empty_plot
@@ -842,7 +1253,6 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                features = features_heatmap$features_current,
                                assay = input$HeatmapAssay,
                                slot = input$HeatmapSlot,
-                               # group.by = isolate(input$HeatmapClusterResolution),
                                size = input$HeatmapTextSize,
                                hjust = input$HeatmapTextHjust,
                                vjust = input$HeatmapTextVjust,
@@ -852,14 +1262,32 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
           ggplot2::theme(axis.text.y = ggplot2::element_text(size = input$HeatmapFeatureTextSize))
       }
     }
-    ggplot2::ggsave(paste0(temp_dir,"/heatmap.pdf"),
-                    p,
-                    width = session$clientData$output_heatmap_width * px2cm,
-                    height = session$clientData$output_heatmap_width * input$HeatmapPlotHWRatio * px2cm,
-                    units = "cm",
-                    limitsize = FALSE)
+    if (input$HeatmapPlotMode) {
+      ggplot2::ggsave(paste0(temp_dir,"/heatmap.pdf"),
+                      p,
+                      width = session$clientData$output_heatmap_width,
+                      height = session$clientData$output_heatmap_width * input$HeatmapPlotHWRatio,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }else{
+      ggplot2::ggsave(paste0(temp_dir,"/heatmap.pdf"),
+                      p,
+                      width = heatmap_dims$width,
+                      height = heatmap_dims$height,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }
+
     return(p)
-  }, height = function(){session$clientData$output_heatmap_width * input$HeatmapPlotHWRatio})
+  }, height = function(){
+    if (input$HeatmapPlotMode) {
+      session$clientData$output_heatmap_width * input$HeatmapPlotHWRatio
+    }else{
+      if (is.null(heatmap_dims$height)) 720 else heatmap_dims$height
+    }
+  })
   # box plot: height = width default
 
 
@@ -872,8 +1300,44 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     })
 
   ################################ Group Averaged Heatmap
+  # Track ClustersSelected changes and whether order is ready
+  averagedheatmap_clustersselectd_state <- reactiveValues(
+    ready = FALSE,
+    current_ClustersSelectd = NULL
+  )
+
+  # Update ready state when AveragedHeatmapClusterOrder is ready
+  observe({
+    req(input$AveragedHeatmapIdentsSelected, input$AveragedHeatmapClusterOrder)
+    # Check if order matches current clusters selected
+    actual_order <- if (!is.null(input$AveragedHeatmapClusterOrder) && length(input$AveragedHeatmapClusterOrder) > 0) {
+      input$AveragedHeatmapClusterOrder
+    } else {
+      NULL
+    }
+
+    # Order is ready if it's not null and contains expected cluster names (in any order)
+    # One possibility is that the two clusters have identical cluster levels. Could this have any consequences?
+    if (!is.null(actual_order) &&
+        !is.null(input$AveragedHeatmapIdentsSelected) &&
+        identical(sort(input$AveragedHeatmapIdentsSelected),sort(actual_order))) {
+      if (is.null(averagedheatmap_clustersselectd_state$AveragedHeatmapIdentsSelected) || averagedheatmap_clustersselectd_state$current_ClustersSelectd != input$AveragedHeatmapIdentsSelected) {
+        averagedheatmap_clustersselectd_state$current_ClustersSelectd <- input$AveragedHeatmapIdentsSelected
+        averagedheatmap_clustersselectd_state$ready <- TRUE
+        if(verbose){message("SeuratExplorer: AveragedHeatmapClusterOrder is now ready for clusters selected: ", input$AveragedHeatmapIdentsSelected)}
+      }
+    }
+  })
+
+  output$AveragedHeatmaphints.UI <- renderUI({
+    if(verbose){message("SeuratExplorer: preparing AveragedHeatmaphints.UI...")}
+    p(paste0("Tips: You can paste multiple genes from a column in excel."),
+      style = "font-size: 12px; margin: 0; color: #004085;")
+  })
+
   # only render plot when the inputs are really changed
   features_heatmap_averaged <- reactiveValues(features_current = NA, features_last = NA)
+
 
   observeEvent(input$AveragedHeatmapGeneSymbol,{
     features_input <- CheckGene(InputGene = input$AveragedHeatmapGeneSymbol,
@@ -884,15 +1348,11 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
-  output$AveragedHeatmaphints.UI <- renderUI({
-    if(verbose){message("SeuratExplorer: preparing AveragedHeatmaphints.UI...")}
-    helpText(strong("Tips: You can paste multiple genes from a column in excel."),
-             style = "font-size:12px;")
-  })
-
   # define the idents used
   output$AveragedHeatmapIdentsSelected.UI <- renderUI({
     req(input$AveragedHeatmapClusterResolution)
+    req(input$AveragedHeatmapClusterResolution %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing AveragedHeatmapIdentsSelected.UI...")}
     shinyWidgets::pickerInput(inputId = "AveragedHeatmapIdentsSelected", label = "Clusters Used:",
                               choices = levels(data$obj@meta.data[,input$AveragedHeatmapClusterResolution]),
@@ -917,7 +1377,58 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     shinyBS::updateCollapse(session, "AveragedcollapseHeatmap", open = "0")
   }))
 
+  # Store the current plot dimensions
+  averagedheatmap_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$averagedheatmap_width, {
+    req(input$averagedheatmap_width)
+    averagedheatmap_dims$width <- input$averagedheatmap_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$averagedheatmap_height, {
+    req(input$averagedheatmap_height)
+    averagedheatmap_dims$height <- input$averagedheatmap_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+
+  # Safe cluster order reactive - waits for order to be ready
+  AveragedHeatmapClusterOrder.Safe <- reactive({
+    req(averagedheatmap_clustersselectd_state$ready, "Waiting for input$AveragedHeatmapIdentsSelected to update...")
+    if (!is.null(input$AveragedHeatmapClusterOrder) && length(input$AveragedHeatmapClusterOrder) > 0) {
+      if(verbose){message("SeuratExplorer: AveragedHeatmapClusterOrder.Safe using user order...")}
+      return(input$AveragedHeatmapClusterOrder)
+    }
+
+    # Fallback to default levels
+    if(verbose){message("SeuratExplorer: AveragedHeatmapClusterOrder.Safe using default levels...")}
+    input$AveragedHeatmapIdentsSelected
+  })
+
+  output$averagedheatmap_resizable_ui <- renderUI({
+    if (input$AveragedHeatmapPlotMode) {
+      withSpinner(plotOutput("averagedheatmap",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'averagedheatmap', initial_width = 800, initial_height = 720)
+    }
+  })
+
+  output$averagedheatmap_size_ui <- renderUI({
+    if (input$AveragedHeatmapPlotMode) {
+      sliderInput("AveragedHeatmapPlotHWRatio", label = "Adjust Height/Width Ratio:", min = 0.1, max = 4, value = 0.9, step = 0.1)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
+
   output$averagedheatmap <- renderPlot({
+    req(input$AveragedHeatmapClusterResolution %in% colnames(data$obj@meta.data))
+    req(all(AveragedHeatmapClusterOrder.Safe() %in% levels(data$obj@meta.data[,input$AveragedHeatmapClusterResolution])))
+
     if(verbose){message("SeuratExplorer: preparing averagedheatmap...")}
     if (any(is.na(features_heatmap_averaged$features_current)) | is.null(input$AveragedHeatmapClusterOrder)) { # NA
       p <- empty_plot # when no symbol or wrong input, show a blank pic.
@@ -925,8 +1436,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
       cds <- data$obj
       Seurat::DefaultAssay(cds) <- input$AveragedHeatmapAssay
       Idents(cds) <- isolate(input$AveragedHeatmapClusterResolution)
-      cds <- subset_Seurat(cds, idents = input$AveragedHeatmapClusterOrder)
-      Idents(cds) <- factor(Idents(cds), levels = input$AveragedHeatmapClusterOrder)
+      cds <- subset_Seurat(cds, idents = AveragedHeatmapClusterOrder.Safe())
+      Idents(cds) <- factor(Idents(cds), levels = AveragedHeatmapClusterOrder.Safe())
       # check gene again, if all the input symbols not exist in the selected assay, specially case: when switch assay!
       if(!any(features_heatmap_averaged$features_current %in% rownames(cds[[input$AveragedHeatmapAssay]]))){
         p <- empty_plot
@@ -942,20 +1453,26 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                              cluster_rows = input$AveragedHeatmapClusterFeatures))
       }
     }
-    pdf(file = paste0(temp_dir,"/AveragedHeatmap.pdf"),
-        width = (session$clientData$output_averagedheatmap_width * px2cm)/2.54,
-        height = (session$clientData$output_averagedheatmap_width * input$AveragedHeatmapPlotHWRatio * px2cm)/2.54)
-    print(p)
+    # special case for not use ggsave, because the p is generated by ComplexHeatmap
+    if (input$AveragedHeatmapPlotMode) {
+      pdf(file = paste0(temp_dir,"/AveragedHeatmap.pdf"),
+          width = session$clientData$output_averagedheatmap_width / 96 * 1.5,
+          height = session$clientData$output_averagedheatmap_width / 96 * 1.5 * input$AveragedHeatmapPlotHWRatio)
+    }else{
+      pdf(file = paste0(temp_dir,"/AveragedHeatmap.pdf"),
+          width = averagedheatmap_dims$width / 96 * 1.5,
+          height = averagedheatmap_dims$height / 96 * 1.5)
+    }
+    p
     dev.off()
-    # 为什么不用以下代码？
-    # ggplot2::ggsave(paste0(temp_dir,"/AveragedHeatmap.pdf"),
-    # p,
-    # width = averagedheatmap_width() * px2cm,
-    # height = averagedheatmap_width() * input$AveragedHeatmapPlotHWRatio * px2cm, units = "cm", limitsize = FALSE)
     return(p)
-  }, height = function(){session$clientData$output_averagedheatmap_width * input$AveragedHeatmapPlotHWRatio})
-  # box plot: height = width default
-
+  }, height = function(){
+    if (input$AveragedHeatmapPlotMode) {
+      session$clientData$output_averagedheatmap_width * input$AveragedHeatmapPlotHWRatio
+    }else{
+      if (is.null(averagedheatmap_dims$height)) 720 else averagedheatmap_dims$height
+    }
+  })
 
   output$downloadaveragedheatmap <- downloadHandler(
     filename = function(){'AveragedHeatmap.pdf'},
@@ -966,11 +1483,47 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     })
 
   # AveragedHeatmap Related bugs
-  # 当从一个多level cluster中仅仅选择一个时会报错：
+  # when switch from a multiple level cluster, and only select one:
   # input should be dgCMatrix. eg: x <- as(x, "CsparseMatrix")
-  # 但在调试时，不会报错，以后在解决吧
+  # this error not show in UI
 
   ################################ Ridge Plot
+  # Track ClustersSelected changes and whether order is ready
+  ridgeplot_clustersselectd_state <- reactiveValues(
+    ready = FALSE,
+    current_ClustersSelectd = NULL
+  )
+
+  # Update ready state when RidgeplotClusterOrder is ready
+  observe({
+    req(input$RidgeplotIdentsSelected, input$RidgeplotClusterOrder)
+    # Check if order matches current clusters selected
+    actual_order <- if (!is.null(input$RidgeplotClusterOrder) && length(input$RidgeplotClusterOrder) > 0) {
+      input$RidgeplotClusterOrder
+    } else {
+      NULL
+    }
+
+    # Order is ready if it's not null and contains expected cluster names (in any order)
+    # One possibility is that the two clusters have identical cluster levels. Could this have any consequences?
+    if (!is.null(actual_order) &&
+        !is.null(input$RidgeplotIdentsSelected) &&
+        identical(sort(input$RidgeplotIdentsSelected),sort(actual_order))) {
+      if (is.null(ridgeplot_clustersselectd_state$RidgeplotIdentsSelected) || ridgeplot_clustersselectd_state$current_ClustersSelectd != input$RidgeplotIdentsSelected) {
+        ridgeplot_clustersselectd_state$current_ClustersSelectd <- input$RidgeplotIdentsSelected
+        ridgeplot_clustersselectd_state$ready <- TRUE
+        if(verbose){message("SeuratExplorer: RidgeplotClusterOrder is now ready for clusters selected: ", input$RidgeplotIdentsSelected)}
+      }
+    }
+  })
+
+  output$Ridgeplothints.UI <- renderUI({
+    if(verbose){message("SeuratExplorer: preparing Ridgeplothints.UI...")}
+    p(paste0("Tips: also supports ", paste(data$extra_qc_options, collapse = " "),
+             "; you can paste multiple genes from a column in excel."),
+      style = "font-size: 12px; margin: 0; color: #004085;")
+  })
+
   # define slot Choice UI
   output$RidgeplotAssaySlots.UI <- renderUI({
     req(input$RidgeplotAssay)
@@ -996,19 +1549,11 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
-
-  output$Ridgeplothints.UI <- renderUI({
-    if(verbose){message("SeuratExplorer: preparing Ridgeplothints.UI...")}
-    helpText(strong(paste("Also supports: ", paste(data$extra_qc_options, collapse = " "),
-                          ".",
-                          sep = "")),
-             br(),
-             strong("Tips: You can paste multiple genes from a column in excel."),style = "font-size:12px;")
-  })
-
   # define the idents used
   output$RidgeplotIdentsSelected.UI <- renderUI({
     req(input$RidgeplotClusterResolution)
+    req(input$RidgeplotClusterResolution %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing RidgeplotIdentsSelected.UI...")}
     shinyWidgets::pickerInput(inputId = "RidgeplotIdentsSelected", label = "Clusters Used:",
                               choices = levels(data$obj@meta.data[,input$RidgeplotClusterResolution]),
@@ -1050,9 +1595,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   # Conditional panel: show this panel when input multiple genes and stack is set to TRUE
   output$Ridgeplot_stack_NotSelected = reactive({
-    req(input$RidgeplotStackPlot)
     if(verbose){message("SeuratExplorer: preparing Ridgeplot_stack_NotSelected...")}
-    !input$RidgeplotStackPlot
+    !isTRUE(input$RidgeplotStackPlot)
   })
 
   outputOptions(output, 'Ridgeplot_stack_NotSelected', suspendWhenHidden = FALSE)
@@ -1064,7 +1608,58 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     updateCheckboxInput(session, "RidgeplotStackPlot", value = FALSE)
   })
 
+  # Store the current plot dimensions
+  ridgeplot_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$ridgeplot_width, {
+    req(input$ridgeplot_width)
+    ridgeplot_dims$width <- input$ridgeplot_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$ridgeplot_height, {
+    req(input$ridgeplot_height)
+    ridgeplot_dims$height <- input$ridgeplot_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+
+  # Safe cluster order reactive - waits for order to be ready
+  RidgeplotClusterOrder.Safe <- reactive({
+    req(ridgeplot_clustersselectd_state$ready, "Waiting for input$RidgeplotIdentsSelected to update...")
+    if (!is.null(input$RidgeplotClusterOrder) && length(input$RidgeplotClusterOrder) > 0) {
+      if(verbose){message("SeuratExplorer: RidgeplotClusterOrder.Safe using user order...")}
+      return(input$RidgeplotClusterOrder)
+    }
+
+    # Fallback to default levels
+    if(verbose){message("SeuratExplorer: RidgeplotClusterOrder.Safe using default levels...")}
+    input$RidgeplotIdentsSelected
+  })
+
+  output$ridgeplot_resizable_ui <- renderUI({
+    if (input$RidgeplotPlotMode) {
+      withSpinner(plotOutput("ridgeplot",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'ridgeplot', initial_width = 800, initial_height = 720)
+    }
+  })
+
+  output$ridgeplot_size_ui <- renderUI({
+    if (input$RidgeplotPlotMode) {
+      sliderInput("RidgeplotHWRatio", label = "Adjust Height/Width Ratio:", min = 0.1, max = 4, value = 0.9, step = 0.1)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
+
   output$ridgeplot <- renderPlot({
+    req(input$RidgeplotClusterResolution %in% colnames(data$obj@meta.data))
+    req(all(RidgeplotClusterOrder.Safe() %in% levels(data$obj@meta.data[,input$RidgeplotClusterResolution])))
+
     if(verbose){message("SeuratExplorer: preparing ridgeplot...")}
     if (any(is.na(features_ridgeplot$features_current))) { # NA
       p <- empty_plot # when no symbol or wrong input, show a blank pic.
@@ -1072,10 +1667,10 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
       cds <- data$obj
       Seurat::DefaultAssay(cds) <- input$RidgeplotAssay
       Seurat::Idents(cds) <- isolate(input$RidgeplotClusterResolution)
-      cds <- subset_Seurat(cds, idents = input$RidgeplotClusterOrder)
-      Seurat::Idents(cds) <- factor(Seurat::Idents(cds), levels = input$RidgeplotClusterOrder)
+      cds <- subset_Seurat(cds, idents = RidgeplotClusterOrder.Safe())
+      Seurat::Idents(cds) <- factor(Seurat::Idents(cds), levels = RidgeplotClusterOrder.Safe())
       # check gene again, if all the input symbols not exist in the selected assay, specially case: when switch assay!
-      if((!any(features_ridgeplot$features_current %in% c(rownames(cds[[input$RidgeplotAssay]]), data$extra_qc_options))) | is.null(input$RidgeplotClusterOrder) ){
+      if((!any(features_ridgeplot$features_current %in% c(rownames(cds[[input$RidgeplotAssay]]), data$extra_qc_options))) | is.null(RidgeplotClusterOrder.Safe()) ){
         p <- empty_plot
       }else{
         p <- Seurat::RidgePlot(object = cds,
@@ -1094,16 +1689,32 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                          axis.text.y = ggplot2::element_text(size = input$RidgeplotYlabelSize))
       }
     }
-    ggplot2::ggsave(paste0(temp_dir,"/ridgeplot.pdf"),
-                    p,
-                    width = session$clientData$output_ridgeplot_width * px2cm,
-                    height = session$clientData$output_ridgeplot_width * input$RidgeplotHWRatio * px2cm,
-                    units = "cm",
-                    limitsize = FALSE)
+    if (input$RidgeplotPlotMode) {
+      ggplot2::ggsave(paste0(temp_dir,"/ridgeplot.pdf"),
+                      p,
+                      width = session$clientData$output_ridgeplot_width,
+                      height = session$clientData$output_ridgeplot_width * input$RidgeplotHWRatio,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }else{
+      ggplot2::ggsave(paste0(temp_dir,"/ridgeplot.pdf"),
+                      p,
+                      width = ridgeplot_dims$width,
+                      height = ridgeplot_dims$height,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }
     return(p)
-  }, height = function(){session$clientData$output_ridgeplot_width * input$RidgeplotHWRatio})
+  }, height = function(){
+    if (input$RidgeplotPlotMode) {
+      session$clientData$output_ridgeplot_width * input$RidgeplotHWRatio
+    }else{
+      if (is.null(ridgeplot_dims$height)) 720 else ridgeplot_dims$height
+    }
+  })
   # box plot: height = width default
-
 
   output$downloadridgeplot <- downloadHandler(
     filename = function(){'ridgeplot.pdf'},
@@ -1114,6 +1725,37 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     })
 
   ################################ Cell ratio Plot
+  # Track resolution changes and whether order is ready
+  # Track ClustersSelected changes and whether order is ready
+  cellratioplot_clustersselectd_state <- reactiveValues(
+    ready = FALSE,
+    current_ClustersSelectd = NULL
+  )
+
+  # Update ready state when CellratioFillOrder is ready
+  observe({
+    req(input$CellratioIdentsSelected, input$CellratioFillOrder)
+    # Check if order matches current clusters selected
+    actual_order <- if (!is.null(input$CellratioFillOrder) && length(input$CellratioFillOrder) > 0) {
+      input$CellratioFillOrder
+    } else {
+      NULL
+    }
+
+    # Order is ready if it's not null and contains expected cluster names (in any order)
+    # One possibility is that the two clusters have identical cluster levels. Could this have any consequences?
+    if (!is.null(actual_order) &&
+        !any(is.null(input$CellratioIdentsSelected)) &&
+        identical(sort(input$CellratioIdentsSelected),sort(actual_order))) {
+      if (is.null(cellratioplot_clustersselectd_state$CellratioIdentsSelected) || cellratioplot_clustersselectd_state$current_ClustersSelectd != input$CellratioIdentsSelected) {
+        cellratioplot_clustersselectd_state$current_ClustersSelectd <- input$CellratioIdentsSelected
+        cellratioplot_clustersselectd_state$ready <- TRUE
+        if(verbose){message("SeuratExplorer: CellratioFillOrder is now ready for clusters selected: ", input$CellratioIdentsSelected)}
+      }
+    }
+  })
+
+
   # define Fill choices
   output$CellratioFillChoice.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing CellratioFillChoice.UI...")}
@@ -1125,8 +1767,11 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   # define the idents used
   output$CellratioIdentsSelected.UI <- renderUI({
     req(input$CellratioFillChoice)
-    if(verbose){message("SeuratExplorer: CellratioIdentsSelected.UI...")}
-    shinyWidgets::pickerInput(inputId = "CellratioIdentsSelected", label = "Clusters Used:",
+    req(input$CellratioFillChoice %in% colnames(data$obj@meta.data))
+
+    if(verbose){message("SeuratExplorer: preparing CellratioIdentsSelected.UI...")}
+    shinyWidgets::pickerInput(inputId = "CellratioIdentsSelected",
+                              label = "Clusters Used:",
                               choices = levels(data$obj@meta.data[,input$CellratioFillChoice]),
                               selected = levels(data$obj@meta.data[,input$CellratioFillChoice]),
                               options = shinyWidgets::pickerOptions(actionsBox = TRUE,
@@ -1140,29 +1785,42 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     if(verbose){message("SeuratExplorer: preparing CellratioplotFillOrder.UI...")}
     shinyjqui::orderInput(inputId = 'CellratioFillOrder',
                           label = 'Drag to order:',
-                          # items = levels(data$obj@meta.data[,input$CellratioFillChoice]),
                           items = input$CellratioIdentsSelected,
                           width = '100%')
+  })
+
+  # Safe cluster order reactive - waits for order to be ready
+  CellratioFillOrder.Safe <- reactive({
+    req(cellratioplot_clustersselectd_state$ready, "Waiting for CellratioIdentsSelected to update...")
+    if (!is.null(input$CellratioFillOrder) && length(input$CellratioFillOrder) > 0) {
+      if(verbose){message("SeuratExplorer: CellratioFillOrder.Safe using user order...")}
+      return(input$CellratioFillOrder)
+    }
+
+    # Fallback to default levels
+    if(verbose){message("SeuratExplorer: CellratioFillOrder.Safe using default levels...")}
+    input$CellratioIdentsSelected
   })
 
   # define X choices
   output$CellratioXChoice.UI <- renderUI({
     req(input$CellratioFillChoice)
     if(verbose){message("SeuratExplorer: preparing CellratioXChoice.UI...")}
-    selectInput("CellratioXChoice","X axis choice:",
+    selectInput("CellratioXChoice",
+                "X axis choice:",
                 choices = data$cluster_options[!data$cluster_options %in% input$CellratioFillChoice])
   })
 
-
   # define x choice order
   output$CellratioplotXOrder.UI <- renderUI({
+    req(input$CellratioXChoice %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing CellratioplotXOrder.UI...")}
-    shinyjqui::orderInput(inputId = 'CellratioXOrder', label = 'Drag to order:',
+    shinyjqui::orderInput(inputId = 'CellratioXOrder',
+                          label = 'Drag to order:',
                           items = levels(data$obj@meta.data[,input$CellratioXChoice]),
                           width = '100%')
   })
-
-
 
   # define Facet choices
   output$CellratioFacetChoice.UI <- renderUI({
@@ -1189,6 +1847,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   # define Facet order
   output$CellratioplotFacetOrder.UI <- renderUI({
+    req(input$CellratioFacetChoice %in% colnames(data$obj@meta.data))
+
     if(verbose){message("SeuratExplorer: preparing CellratioplotFacetOrder.UI...")}
     if (!is.null(FacetChoice.Revised())) {
       shinyjqui::orderInput(inputId = 'CellratioFacetOrder',
@@ -1200,19 +1860,58 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }
   })
 
+  # Store the current plot dimensions
+  cellratioplot_dims <- reactiveValues(width = 800, height = 720)
+
+  # Custom message handlers to update plot dimensions from JavaScript
+  observeEvent(input$cellratioplot_width, {
+    req(input$cellratioplot_width)
+    cellratioplot_dims$width <- input$cellratioplot_width
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  observeEvent(input$cellratioplot_height, {
+    req(input$cellratioplot_height)
+    cellratioplot_dims$height <- input$cellratioplot_height
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+
+  output$cellratioplot_resizable_ui <- renderUI({
+    if (input$CellratioMode) {
+      withSpinner(plotOutput("cellratioplot",height = "auto"))
+    }else{
+      create_resizable_plot_ui(plot_id = 'cellratioplot', initial_width = 800, initial_height = 720)
+    }
+  })
+
+  output$cellratioplot_size_ui <- renderUI({
+    if (input$CellratioMode) {
+      sliderInput("CellratioPlotHWRatio", label = "Adjust Height/Width Ratio", min = 0.1, max = 4, value = 0.9)
+    }else{
+      hr()
+      div(
+        style = "background-color: #e7f3ff; border-left: 4px solid #007bff; padding: 10px; border-radius: 4px;",
+        p("Tip: Drag the right or bottom edge to resize the plot", style = "font-size: 12px; margin: 0; color: #004085;")
+      )
+    }
+  })
+
   # plot
   output$cellratioplot <- renderPlot({
-    req(input$CellratioXOrder)
-    req(input$CellratioFillOrder)
+    req(input$CellratioXOrder, input$CellratioFillChoice, input$CellratioXChoice)
+    req(input$CellratioFillChoice %in% colnames(data$obj@meta.data))
+    req(input$CellratioXChoice %in% colnames(data$obj@meta.data))
+    req(all(CellratioFillOrder.Safe() %in% levels(data$obj@meta.data[,input$CellratioFillChoice])))
+    req(all(input$CellratioXOrder %in% levels(data$obj@meta.data[,input$CellratioXChoice])))
+    req(input$CellratioFillChoice != input$CellratioXOrder)
+
     if(verbose){message("SeuratExplorer: preparing cellratioplot...")}
-    cds <- data$obj
+      cds <- data$obj
     if (is.null(FacetChoice.Revised())) { # not facet
       p <- cellRatioPlot(object = cds,
-                         idents = input$CellratioFillOrder,
+                         idents = CellratioFillOrder.Safe(),
                          sample.name = isolate(input$CellratioXChoice),
                          sample.order = input$CellratioXOrder,
                          celltype.name = isolate(input$CellratioFillChoice),
-                         celltype.order = input$CellratioFillOrder,
+                         celltype.order = CellratioFillOrder.Safe(),
                          facet.name = NULL,
                          facet.order = NULL,
                          col.width = input$CellratioColumnWidth,
@@ -1221,11 +1920,11 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                          color.choice = input$Cellratiofillcolorplatte)
     }else{
       p <- cellRatioPlot(object = cds,
-                         idents = input$CellratioFillOrder,
+                         idents = CellratioFillOrder.Safe(),
                          sample.name = isolate(input$CellratioXChoice),
                          sample.order = input$CellratioXOrder,
                          celltype.name = isolate(input$CellratioFillChoice),
-                         celltype.order = input$CellratioFillOrder,
+                         celltype.order = CellratioFillOrder.Safe(),
                          facet.name = FacetChoice.Revised(),
                          facet.order = input$CellratioFacetOrder,
                          col.width = input$CellratioColumnWidth,
@@ -1238,15 +1937,31 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                                                   vjust = 1,
                                                                   hjust=1))
     }
-    ggplot2::ggsave(paste0(temp_dir,"/cellratioplot.pdf"),
-                    p,
-                    width = session$clientData$output_cellratioplot_width * px2cm,
-                    height = session$clientData$output_cellratioplot_width * input$CellratioplotHWRatio * px2cm,
-                    units = "cm",
-                    limitsize = FALSE)
+    if (input$CellratioMode) {
+      ggplot2::ggsave(paste0(temp_dir,"/cellratioplot.pdf"),
+                      p,
+                      width = session$clientData$output_cellratioplot_width,
+                      height = session$clientData$output_cellratioplot_width * input$CellratioPlotHWRatio,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }else{
+      ggplot2::ggsave(paste0(temp_dir,"/cellratioplot.pdf"),
+                      p,
+                      width = cellratioplot_dims$width,
+                      height = cellratioplot_dims$height,
+                      units = "px",
+                      scale = 5,
+                      limitsize = FALSE)
+    }
     return(p)
-  }, height = function(){session$clientData$output_cellratioplot_width * input$CellratioplotHWRatio})
-  # box plot: height = width default
+  }, height = function(){
+    if (input$CellratioMode) {
+      session$clientData$output_cellratioplot_width * input$CellratioPlotHWRatio
+    }else{
+      if (is.null(cellratioplot_dims$height)) 720 else cellratioplot_dims$height
+    }
+  })
 
   # download
   output$downloadcellratioplot <- downloadHandler(
@@ -1259,6 +1974,9 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   output$cellratiodata <-  DT::renderDT(server=FALSE,{
     req(input$CellratioFillChoice)
+    req(input$CellratioFillChoice %in% colnames(data$obj@meta.data))
+    req(input$CellratioXChoice %in% colnames(data$obj@meta.data))
+
     meta <- data$obj@meta.data
     # subset
     meta <- meta[meta[,input$CellratioFillChoice] %in% input$CellratioIdentsSelected,]
@@ -1284,9 +2002,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                                          list(extend = 'excel', title = "DEGs")))))
   })
   # bugs
-  # cellratioplot 相关的问题
-  # fill in choice 会triger Cluster used 和 X axis choice 以及 facet choice,
-  # 所以改变fill in choice 会导致render plot 更新至少2次！暂时没有简单的解决方案
+  # fill in choice will trigger Cluster used and X axis choice and facet choice
+  # so change fill in choice will trigger render plot update twice at least! no good solutions for now.
 
 
 
@@ -1311,7 +2028,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   observeEvent(input$DEGsClusterMarkersAnalysis, {
     if(verbose){message("SeuratExplorer: preparing DEGsClusterMarkersAnalysis...")}
     cds <- data$obj
-    if (length(unique(as.character(Idents(cds)))) < 2) {
+    if (length(levels(cds@meta.data[,input$ClusterMarkersClusterResolution])) < 2) {
       showModal(modalDialog(title = "Error...",
                             "Please select a cluster resolution with more than one group!",
                             easyClose = TRUE,
@@ -1319,18 +2036,29 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                             size = "l"))
     }else{
       showModal(modalDialog(title = "Calculating Cluster Markers...",
-                            "Please wait for a few minutes!",
-                            footer= NULL,
+                            div(id = 'clustermarkers_log_output', 'Please wait a moment!'),
+                            footer = NULL,
+                            # footer = modalButton("Cancel"), # future work to stop current run
                             size = "l"))
       cds <- check_SCT_assay(cds)
-      cluster.markers <- Seurat::FindAllMarkers(cds,
-                                                test.use = input$testuse,
-                                                assay = input$DEGsAssay,
-                                                logfc.threshold = input$logfcthreshold,
-                                                group.by = input$ClusterMarkersClusterResolution,
-                                                min.pct = input$minpct,
-                                                min.diff.pct = ifelse(input$mindiffpct, input$mindiffpct, -Inf),
-                                                only.pos = TRUE)
+      cluster.markers <- withCallingHandlers({
+        Seurat::FindAllMarkers(cds,
+                              test.use = input$testuse,
+                              assay = input$DEGsAssay,
+                              logfc.threshold = input$logfcthreshold,
+                              group.by = input$ClusterMarkersClusterResolution,
+                              min.pct = input$minpct,
+                              min.diff.pct = ifelse(input$mindiffpct, input$mindiffpct, -Inf),
+                              only.pos = TRUE,
+                              verbose = TRUE)
+        },
+        message = function(m) {
+          # refresh UI
+          shinyjs::html(id = "clustermarkers_log_output", html = paste0( "<br>", m$message), add = TRUE)
+          # auto scroll to bottom to ensure showing the latest messages
+          shinyjs::runjs("var d = document.getElementById('clustermarkers_log_output'); d.scrollTop = d.scrollHeight;")
+        }
+      )
       removeModal()
       DEGs$degs <- cluster.markers
       DEGs$degs_ready <- TRUE
@@ -1339,9 +2067,30 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   # Part-2: Find DEGs for two groups
   # define Cluster Annotation choice
+  output$IntraClusterDEGsSubsetCells.UI <- renderUI({
+    if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsSubsetCells.UI...")}
+    selectInput("IntraClusterDEGsSubsetCells","Filter Cells By:",
+                choices = data$cluster_option)
+  })
+
+  # define Cluster Annotation choice
+  output$IntraClusterDEGsSubsetCellsSelectedClusters.UI <- renderUI({
+    req(input$IntraClusterDEGsSubsetCells)
+    if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsSubsetCellsSelectedClusters.UI...")}
+    shinyWidgets::pickerInput(inputId = "IntraClusterDEGsSubsetCellsSelectedClusters", label = "Cells to Keep:",
+                              choices = levels(data$obj@meta.data[,input$IntraClusterDEGsSubsetCells]),
+                              selected = levels(data$obj@meta.data[,input$IntraClusterDEGsSubsetCells]),
+                              options = shinyWidgets::pickerOptions(actionsBox = TRUE,
+                                                                    size = 10,
+                                                                    selectedTextFormat = "count > 3"),
+                              multiple = TRUE)
+  })
+
+  # define Cluster Annotation choice
   output$IntraClusterDEGsCustomizedGroups.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsCustomizedGroups.UI...")}
-    selectInput("IntraClusterDEGsCustomizedGroups","Group Cells By:", choices = data$cluster_options)
+    selectInput("IntraClusterDEGsCustomizedGroups","Group Cells By:",
+                choices = setdiff(data$cluster_options, input$IntraClusterDEGsSubsetCells))
   })
 
   # define the idents used
@@ -1363,27 +2112,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                   input$IntraClusterDEGsCustomizedGroupsCase))
   })
 
-  # define Cluster Annotation choice
-  output$IntraClusterDEGsSubsetCells.UI <- renderUI({
-    req(input$IntraClusterDEGsCustomizedGroups)
-    if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsSubsetCells.UI...")}
-    selectInput("IntraClusterDEGsSubsetCells","Filter Cells By:",
-                choices = setdiff(data$cluster_options, input$IntraClusterDEGsCustomizedGroups))
-  })
 
-  # define Cluster Annotation choice
-  output$IntraClusterDEGsSubsetCellsSelectedClusters.UI <- renderUI({
-    req(input$IntraClusterDEGsCustomizedGroups)
-    req(input$IntraClusterDEGsSubsetCells)
-    if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsSubsetCellsSelectedClusters.UI...")}
-    shinyWidgets::pickerInput(inputId = "IntraClusterDEGsSubsetCellsSelectedClusters", label = "Cells to Keep:",
-                              choices = levels(data$obj@meta.data[,input$IntraClusterDEGsSubsetCells]),
-                              selected = levels(data$obj@meta.data[,input$IntraClusterDEGsSubsetCells]),
-                              options = shinyWidgets::pickerOptions(actionsBox = TRUE,
-                                                                    size = 10,
-                                                                    selectedTextFormat = "count > 3"),
-                              multiple = TRUE)
-  })
 
   # compare two groups, support subset clusters before comparison
   observeEvent(input$IntraClusterDEGssAnalysis, {
@@ -1478,7 +2207,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   #     return(TRUE)
   #   }
   # })
-
+  #
   # outputOptions(output, 'DEGs_row_selected', suspendWhenHidden=FALSE)
   #
   # db <- SeuratExplorer::GenesDB
@@ -1925,11 +2654,12 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   output$cell_annotation <- DT::renderDataTable({
     req(input$renameclustersClusterResolution)
+    req(input$renameclustersClusterResolution %in% colnames(data$obj@meta.data))
     DT::datatable(cell_annotation_df(),
                   editable = list(target = 'cell', disable = list(columns = 0)), # Disables columns 1
                   selection = "single",
                   options = list(dom = 'lrtip', lengthChange = FALSE, pageLength = -1,
-                                 language = list(info = "Double click '-' to start edit, only support letters, numbers, - and _.")),
+                                 language = list(info = "Double click '-' to start edit, only support letters, numbers, whitespace, - and _.")),
                   rownames = FALSE
                   )
   })
@@ -1937,7 +2667,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   observeEvent(input$cell_annotation_cell_edit, {
     info <- input$cell_annotation_cell_edit
     new_df <- cell_annotation_df()
-    new_df[info$row, info$col + 1] <- info$value
+    new_df[info$row, info$col + 1] <- trimws(info$value)
     cell_annotation_df(new_df)
   })
 
@@ -1953,7 +2683,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   observeEvent(input$renameclustersCheck, {
     # check input format
     if ('-' %in% cell_annotation_df()$New_Name) {
-      showModal(modalDialog(title = "Error",
+      showModal(modalDialog(title = "Error:",
                             "'-' found, please edit all levels!",
                             footer= modalButton("Dismiss"),
                             easyClose = TRUE,
@@ -1961,21 +2691,24 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
       output$renameclusterscheck_OK <- reactive(FALSE)
     }else if('' %in% trimws(cell_annotation_df()$New_Name)){
       showModal(modalDialog(title = "Error",
-                            "New cluster can not be empty!",
+                            "New cluster names can not be empty!",
                             footer= modalButton("Dismiss"),
                             easyClose = TRUE,
                             size = "l"))
       output$renameclusterscheck_OK <- reactive(FALSE)
     }else if (!all(sapply(cell_annotation_df()$New_Name, check_allowed_chars))) {
-      showModal(modalDialog(title = "Error",
-                            "Unsupported character found! only support letters, numbers, - and _.",
+      error_names <- cell_annotation_df()$New_Name[!sapply(cell_annotation_df()$New_Name, check_allowed_chars)]
+      showModal(modalDialog(title = "Error:",
+                            HTML(paste(c("Unsupported character found in New_Name! only support letters, numbers, whitespace, - and _. Please check names bellow:", error_names),
+                                  collapse = '<br>')),
                             footer= modalButton("Dismiss"),
                             easyClose = TRUE,
                             size = "l"))
       output$renameclusterscheck_OK <- reactive(FALSE)
-    } else  if (!check_allowed_chars(input$renameclustersNewClusterName)) {
-      showModal(modalDialog(title = "Error",
-                            "Unsupported character found! only support letters, numbers, - and _.",
+    } else  if (!check_allowed_chars(input$renameclustersNewClusterName, allowed_characters = "[^a-zA-Z0-9_]")) {
+      showModal(modalDialog(title = "Error:",
+                            # Seurat meta.data colnames not allow - character,which will cause an error when plot Dimplot.
+                            paste0("Unsupported character found in ", input$renameclustersNewClusterName, "! only support letters, numbers, and _."),
                             footer= modalButton("Dismiss"),
                             easyClose = TRUE,
                             size = "l"))
@@ -1983,7 +2716,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }else{
       # check cluster name duplicates
       if (input$renameclustersNewClusterName %in% colnames(data$obj@meta.data)) {
-          showModal(modalDialog(title = "Error",
+          showModal(modalDialog(title = "Error:",
                                 "Duplicated cluster name found, please change the cluster name!",
                                 footer= modalButton("Dismiss"),
                                 easyClose = TRUE,
@@ -2011,9 +2744,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   output$renameclustersNewClusterNamehints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing renameclustersNewClusterNamehints.UI...")}
-    helpText(strong(paste("Avoid using: ",
-                          paste(colnames(data$obj@meta.data), collapse = " "), ". Only support letters, numbers, - and _.",
-                          sep = "")),style = "font-size:12px;")
+    p(paste0("Avoid using already existed column names in meta data. And only support letters, numbers, -, whitespace, _, whitespace at botch ends will be removed automatically!"),
+      style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
   observeEvent(input$renameclustersSubmit, {
@@ -2127,7 +2859,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 #' @import shiny shinydashboard shinyWidgets
 #' @import ggplot2 Seurat SeuratObject
 #' @importFrom utils write.csv
-#'
+#' @importFrom methods validObject
+#' @importFrom shinyjs reset
 #' @param input Input from the UI
 #' @param output Output to send back to UI
 #' @param session from shiny server function
@@ -2162,40 +2895,72 @@ server <- function(input, output, session) {
   observeEvent(input$dataset_file, {
     ext = tools::file_ext(input$dataset_file$datapath) # file_ext: returns the file (name) extensions
     # validate + need: check file name post-fix, in not rds or qs2, will throw an error
-    validate(need(expr = ext %in% c("rds","qs2","Rds"),
-                  message = "Please upload a .rds or a .qs2 file"))
-    data$Path <- input$dataset_file$datapath
+    if (!(tolower(ext) %in% c("qs2",'rds'))) {
+      showModal(modalDialog(title = "Error...",
+                            "Please upload a file with the extension .rds or .qs2!",
+                            easyClose = TRUE,
+                            footer = NULL,
+                            size = "l"))
+      shinyjs::reset('dataset_file')
+    }else{
+      obj <- tryCatch({
+        readSeurat(path = input$dataset_file$datapath, verbose = getOption('SeuratExplorerVerbose'))
+      }, error = function(e) {
+        return(FALSE)
+      })
+      # validate Seurat object
+      if (is.logical(obj) && obj == FALSE) {
+        showModal(modalDialog(title = "Error...",
+                              "Read file failed!",
+                              easyClose = TRUE,
+                              footer = NULL,
+                              size = "l"))
+        shinyjs::reset('dataset_file')
 
-    data$obj <- prepare_seurat_object(obj = readSeurat(path = input$dataset_file$datapath, verbose = getOption('SeuratExplorerVerbose')),
-                                      verbose = getOption('SeuratExplorerVerbose'))
+      } else if (!all(validObject(obj), inherits(obj, "Seurat"))) {
+        showModal(modalDialog(title = "Error...",
+                              paste0("The submitted data is a ", class(obj)[[1]], " object, not a Seurat object!"),
+                              easyClose = TRUE,
+                              footer = NULL,
+                              size = "l"))
+        shinyjs::reset('dataset_file')
+      } else {
+        data$Path <- input$dataset_file$datapath
 
-    data$reduction_options <- prepare_reduction_options(obj = data$obj,
-                                                        keywords = getOption("SeuratExplorerReductionKeyWords"),
-                                                        verbose = getOption('SeuratExplorerVerbose'))
+        data$obj <- prepare_seurat_object(obj = updateSeurat(obj, verbose = getOption('SeuratExplorerVerbose')),
+                                          verbose = getOption('SeuratExplorerVerbose'))
 
-    data$assays_slots_options <- prepare_assays_slots(obj = data$obj,
-                                                      data_slot = data$assay_slots,
+        data$reduction_options <- prepare_reduction_options(obj = data$obj,
+                                                            keywords = getOption("SeuratExplorerReductionKeyWords"),
+                                                            verbose = getOption('SeuratExplorerVerbose'))
+
+        data$assays_slots_options <- prepare_assays_slots(obj = data$obj,
+                                                          data_slot = data$assay_slots,
+                                                          verbose = getOption('SeuratExplorerVerbose'))
+
+        data$assays_options <- prepare_assays_options(Alist = data$assays_slots_options,
                                                       verbose = getOption('SeuratExplorerVerbose'))
 
-    data$assays_options <- prepare_assays_options(Alist = data$assays_slots_options,
-                                                  verbose = getOption('SeuratExplorerVerbose'))
+        data$assay_default <- ifelse(data$assay_default %in% data$assays_options,data$assay_default,
+                                     data$assays_options[1]) # update the default assay
 
-    data$assay_default <- ifelse(data$assay_default %in% data$assays_options,data$assay_default,
-                                 data$assays_options[1]) # update the default assay
+        data$cluster_options <- prepare_cluster_options(df = data$obj@meta.data,
+                                                        verbose = getOption('SeuratExplorerVerbose'))
 
-    data$cluster_options <- prepare_cluster_options(df = data$obj@meta.data,
+        data$gene_annotions_list <- prepare_gene_annotations(obj = data$obj,
+                                                             verbose = getOption('SeuratExplorerVerbose'))
+
+        data$split_options <- prepare_split_options(df = data$obj@meta.data,
+                                                    max.level = data$split_maxlevel,
                                                     verbose = getOption('SeuratExplorerVerbose'))
 
-    data$gene_annotions_list <- prepare_gene_annotations(obj = data$obj,
-                                                         verbose = getOption('SeuratExplorerVerbose'))
+        data$extra_qc_options <- prepare_qc_options(df = data$obj@meta.data,
+                                                    types = c("double","integer","numeric"),
+                                                    verbose = getOption('SeuratExplorerVerbose'))
+      }
 
-    data$split_options <- prepare_split_options(df = data$obj@meta.data,
-                                                max.level = data$split_maxlevel,
-                                                verbose = getOption('SeuratExplorerVerbose'))
+    }
 
-    data$extra_qc_options <- prepare_qc_options(df = data$obj@meta.data,
-                                                types = c("double","integer","numeric"),
-                                                verbose = getOption('SeuratExplorerVerbose'))
   })
 
   # after data loaded,set loaded to TRUE
