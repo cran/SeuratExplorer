@@ -3,7 +3,11 @@ prepare_seurat_object <- function(obj, verbose = FALSE){
   # trans the none-factor columns in meta.data to factor
   # if the unique counts less than 1/20 of total cells, and not more than 50, in chr or num type columns，will be forced to factor type.
   # possible problem: unique_max_percent = 0.05 may not suitable for a data has 100 cells but more than 5 clusters.
-  obj@meta.data <- modify_columns_types(df = obj@meta.data, types_to_check = c("numeric", "character"), unique_max_counts = 50, unique_max_percent = 0.05, verbose = verbose)
+  obj@meta.data <- modify_columns_types(df = obj@meta.data, types_to_check = c("numeric", "character"), unique_max_counts = 200, unique_max_percent = 0.1, verbose = verbose)
+  # remove zero count levels
+  obj@meta.data[] <- lapply(obj@meta.data, function(x) {
+    if (is.factor(x)) droplevels(x) else x
+  })
   # for split object, join layers
   if (sum(grepl("^counts",Layers(object = obj))) > 1 | sum(grepl("^data",Layers(object = obj))) > 1) {
     obj <- SeuratObject::JoinLayers(object = obj)
@@ -61,14 +65,14 @@ get_data_matrix <- function(SeuratObj, assay = 'RNA') {
 
 
 # Converts eligible non-factor columns to factor type, and converts strings that may be numbers to numbers.
-modify_columns_types <- function(df, types_to_check = c("numeric", "character"), unique_max_counts = 50, unique_max_percent = 0.05, verbose = FALSE){
+modify_columns_types <- function(df, types_to_check = c("numeric", "character"), unique_max_counts = 200, unique_max_percent = 0.1, verbose = FALSE){
   # first, extract all columns in types_to_check types
   candidates.types.logic <- sapply(df, class) %in% types_to_check
   # then, for factor columns, check the levels, level counts should less than (total cells) * 0.1, if not trans to character
   factor_columns_names <- colnames(df)[sapply(df, class) %in% 'factor']
   factor_columns_names_not_ok <- factor_columns_names[sapply(df[,factor_columns_names], function(x)length(levels(x))) > nrow(df) * 0.1]
   if (length(factor_columns_names_not_ok) != 0) {
-    df[,factor_columns_names_not_ok] <- lapply(df[,factor_columns_names_not_ok], as.character)
+    df[,factor_columns_names_not_ok] <- lapply(df[,factor_columns_names_not_ok,drop = FALSE], as.character)
   }
   # then for types_to_check types
   # unique values counts should less than (total cells)*0.05, for 100 cells has 5 clusters at most. and for 10000 cells has 50 clusters at most.
@@ -894,6 +898,24 @@ updateSeurat <- function(obj, verbose = FALSE){
   return(obj)
 }
 
+check_data <- function(data, key_paramaters = c('reduction_options', 'cluster_options', 'assays_options', 'assays_slots_options', 'split_options')){
+  zero_length_parameters <- names(data)[unname(unlist(lapply(data, function(x){length(x) == 0})))]
+  zero_length_parameters <- zero_length_parameters[zero_length_parameters %in% key_paramaters]
+  if (length(zero_length_parameters) != 0) {
+    showModal(modalDialog(
+      title = tagList(icon("triangle-exclamation"), "Warnning"),
+      tags$div(
+        tags$p(paste0("Key parameters found with zero length: ", paste0(zero_length_parameters, collapse = ', '), '.')),
+        tags$small(style = "color: #6c757d;", "Related functions will not work properly!")
+      ),
+      easyClose = TRUE,
+      footer = modalButton("Continue"),
+      size = "m"
+     )
+    )
+  }
+}
+
 
 # > SCT assay related bug:
 # https://github.com/satijalab/seurat/issues/8235; 2025.03.26, may be Seurat Package will solve this bug in future.
@@ -923,14 +945,58 @@ empty_plot <- ggplot2::ggplot() +
 
 
 
-check_allowed_chars <- function(text_string, allowed_characters = "[^a-z A-Z0-9_-]") {
+check_allowed_chars <- function(text_string, allowed_characters = "[^a-z A-Z0-9_+-]") {
   # Returns TRUE if NO forbidden characters are found (meaning only allowed chars are present)
-  # allows for letters, numbers, whitespace, -, and _
+  # allows for letters, numbers, whitespace, -, +, and _
   !grepl(allowed_characters, text_string)
 }
 
 
 # create_resizable_plot_ui is a function created by Claude code
+#' Create a collapsible parameter group for Plot Settings
+#'
+#' @description
+#' Creates a styled, collapsible parameter group for the Plot Settings sidebar.
+#' Clicking the header toggles visibility of the content area.
+#' The group preserves the existing color-coded left border styling.
+#'
+#' @param id A unique identifier for the collapse target (used as the div ID).
+#' @param title Character string for the group header title.
+#' @param icon_name Character string passed to `shiny::icon()`.
+#' @param color Hex color string for the left border and title accent. Default: "#3b82f6".
+#' @param ... UI elements to place inside the collapsible content area.
+#'   Groups always start expanded.
+#'
+#' @import shiny
+#' @return A `shiny.tag` div representing the collapsible parameter group.
+#' @export
+param_group_collapse <- function(id, title, icon_name, color = "#3b82f6", ...) {
+  # Pre-compute style strings
+  border_css <- sprintf("background: #f8f9fa; border: 1px solid %s; border-left: 4px solid %s; padding: 12px; border-radius: 6px; margin-bottom: 15px;", color, color)
+  summary_css <- sprintf("list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; color: %s; outline: none;", color)
+  title_css <- sprintf("color: %s; font-size: 14px; font-weight: 600;", color)
+
+  details_args <- list(
+    open = "open",
+    style = border_css,
+    tags$summary(
+      style = summary_css,
+      tags$span(
+        style = "display: flex; align-items: center; gap: 8px;",
+        icon(icon_name),
+        tags$span(title, style = title_css)
+      ),
+      tags$span(
+        class = "param-group-chevron",
+        icon("chevron-down"),
+        style = "transition: transform 0.3s ease; display: inline-block;"
+      )
+    ),
+    tags$div(style = "margin-top: 10px;", ...)
+  )
+  do.call(tags$details, details_args)
+}
+
 create_resizable_plot_ui <- function(plot_id, initial_width = 800, initial_height = 720) {
   div(
     id = paste0(plot_id, "_wrapper"),

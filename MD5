@@ -1,9 +1,9 @@
-b44bbede6499de692c4076529e833314 *DESCRIPTION
-13e4b40e58bd469bad7286cb2a85dec0 *NAMESPACE
-3dc2b81dac6e27acd0dc39aba34f00b2 *R/functions.R
-cf2fa3082c7e6004ee8a296ed25d46b0 *R/launch.R
-4ab2c69d9cb6fe1e77e905ca06a5adb5 *R/server.R
-0452b59da59848056409023f5f02d5e0 *R/ui.R
+f1ab80afe970cfc7c1629467e4a1cff5 *DESCRIPTION
+718b2a34f4efc010d2398ab467271c80 *NAMESPACE
+e7906c2fc70b1932113003f3a3175b3c *R/functions.R
+0f216c263ceb344879741cf6e187fe64 *R/launch.R
+63c22d831a1114f5453425c7c8e30136 *R/server.R
+62cc6c2f9075a04f0bd8c80beb751a38 *R/ui.R
 5c649e74d79cab3eb5a5eed2f4f39b47 *man/cellRatioPlot.Rd
 b5dac6d33903d822017843e55aeae262 *man/explorer_body_ui.Rd
 6601e13c29c246d3bdf482bc7be3c186 *man/explorer_server.Rd
@@ -12,7 +12,8 @@ fcd99473ff34460367ade6d8e9a18559 *man/explorer_sidebar_ui.Rd
 5ff8b56fdb9b2040a75c70f44de74968 *man/get_counts_matrix.Rd
 e91cd223b5721176d9691862182fa28a *man/get_data_matrix.Rd
 e5b5a06e93d01e7afdaf8f739a0cc3e6 *man/join_layers_if_needed.Rd
-389b571b958019421eb96753e376f166 *man/launchSeuratExplorer.Rd
+7c643a821525b4ce694fa9bead4759a8 *man/launchSeuratExplorer.Rd
+0e86a78d07d6fe214648ce5cb848b23b *man/param_group_collapse.Rd
 b61b8e8892ea1afc6a3fd20dd20b80d2 *man/prepare_gene_annotations.Rd
 9aacd71017d6a75de0d77f2d923fa19f *man/server.Rd
 2a3b73bc13afe4c7e4e626c1dbd78016 *man/top_genes.Rd

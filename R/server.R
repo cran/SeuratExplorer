@@ -10,9 +10,9 @@
 #' @param data the Seurat object and related parameters
 #'
 #' @import Seurat SeuratObject
-#' @importFrom utils str
+#' @importFrom utils str head
 #' @importFrom grDevices dev.off pdf
-#' @importFrom stats na.omit
+#' @importFrom stats na.omit setNames
 #' @importFrom shinyjs hide html runjs
 #' @export
 #' @return server side functions related to `explorer_sidebar_ui`
@@ -109,7 +109,9 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                               'TopGenesAssay' = c('counts'),
                               'FeatureSummaryAssay' = c('data'),
                               'FeatureCorrelationAssay' = c('data'),
-                              'FeaturesDataframeAssay'= isolate(data$assay_slots))
+                              'FeaturesDataframeAssay'= isolate(data$assay_slots),
+                              'GeneclustersAssay' = c('counts', 'data'),
+                              'ModuleScoreAssay' = c('counts', 'data'))
 
   filter_assay <- function(assay_info, allowed_slots){
     # assay_info is a list contains all slot names for each assay
@@ -128,6 +130,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   output_assay <- lapply(1:nrow(assay_df), function(i){
     output[[assay_df$Element[i]]] <- renderUI({
+      req(data$assays_slots_options)
       if(verbose){message(paste0("SeuratExplorer: preparing ", assay_df$Element[i], "..."))}
       assays_options <- filter_assay(assay_info = data$assays_slots_options,
                                      allowed_slots = assay_allowed_slots[[assay_df$UIID[i]]])
@@ -407,6 +410,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   features_dimplot <- reactiveValues(features_current = NA, features_last = NA)
 
   observeEvent(input$FeatureGeneSymbol,{
+    req(data$obj, input$FeatureAssay)
     features_input <- CheckGene(InputGene = input$FeatureGeneSymbol,
                                 GeneLibrary =  c(rownames(data$obj@assays[[input$FeatureAssay]]),
                                                  data$extra_qc_options))
@@ -591,6 +595,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   features_vlnplot <- reactiveValues(features_current = NA, features_last = NA)
 
   observeEvent(input$VlnGeneSymbol,{
+    req(data$obj, input$VlnAssay)
     features_input <- CheckGene(InputGene = input$VlnGeneSymbol,
                                 GeneLibrary =  c(rownames(data$obj@assays[[input$VlnAssay]]),
                                                  data$extra_qc_options))
@@ -905,6 +910,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   features_dotplot <- reactiveValues(features_current = NA, features_last = NA)
 
   observeEvent(input$DotGeneSymbol,{
+    req(data$obj, input$DotAssay)
     features_input <- CheckGene(InputGene = input$DotGeneSymbol,
                                 GeneLibrary =  rownames(data$obj@assays[[input$DotAssay]]))
     if (!identical(sort(features_dotplot$features_current), sort(features_input))) {
@@ -916,18 +922,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   # inform extra qc options for Gene symbol input
   output$Dothints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing Dothints.UI...")}
-    if (length(data$extra_qc_options) == 0) {
-      p("You can paste multiple genes from a column in excel.",
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    } else if(length(data$extra_qc_options) > 10){
-      p(paste0("Also supports: ", paste0(c(data$extra_qc_options[1:10], '...'), collapse = " "),
-               "; you can paste multiple genes from a column in excel."),
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    } else{
-      p(paste0("Also supports: ", paste0(data$extra_qc_options, collapse = " "),
-               "; you can paste multiple genes from a column in excel."),
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    }
+    p("You can paste multiple genes from a column in excel.",
+      style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
   # define the idents used
@@ -964,6 +960,27 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   output$DotSplitBy.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing DotSplitBy.UI...")}
     selectInput("DotSplitBy","Split by:", choices = c("None" = "None", data$split_options))
+  })
+
+  # Filter Cells UI for Dot Plot
+  output$IntraClusterDotplotSubsetCells.UI <- renderUI({
+    if(verbose){message("SeuratExplorer: preparing IntraClusterDotplotSubsetCells.UI...")}
+    excluded <- unique(c(input$DotSplitBy, input$DotClusterResolution))
+    excluded <- excluded[!is.null(excluded) & excluded != "None"]
+    selectInput("IntraClusterDotplotSubsetCells","Filter Cells By:",
+                choices = setdiff(data$cluster_options, excluded))
+  })
+
+  output$IntraClusterDotplotSubsetCellsSelectedClusters.UI <- renderUI({
+    req(input$IntraClusterDotplotSubsetCells)
+    if(verbose){message("SeuratExplorer: preparing IntraClusterDotplotSubsetCellsSelectedClusters.UI...")}
+    shinyWidgets::pickerInput(
+      inputId = "IntraClusterDotplotSubsetCellsSelectedClusters",
+      label = "Cells to Keep:",
+      choices = levels(data$obj@meta.data[, input$IntraClusterDotplotSubsetCells]),
+      selected = levels(data$obj@meta.data[, input$IntraClusterDotplotSubsetCells]),
+      options = shinyWidgets::pickerOptions(actionsBox = TRUE, size = 10, selectedTextFormat = "count > 3"),
+      multiple = TRUE)
   })
 
 
@@ -1050,6 +1067,15 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
       p <- empty_plot # when no symbol or wrong input, show a blank pic.
     }else{
       cds <- data$obj
+      # Apply cell filter if configured
+      if (!is.null(input$IntraClusterDotplotSubsetCells) &&
+          !is.null(input$IntraClusterDotplotSubsetCellsSelectedClusters) &&
+          input$IntraClusterDotplotSubsetCells %in% colnames(cds@meta.data)) {
+        col <- input$IntraClusterDotplotSubsetCells
+        vals <- input$IntraClusterDotplotSubsetCellsSelectedClusters
+        keep_cells <- colnames(cds)[cds@meta.data[, col] %in% vals]
+        if (length(keep_cells) > 0) cds <- subset_Seurat(cds, cells = keep_cells)
+      }
       DefaultAssay(cds) <- input$DotAssay
       Idents(cds) <- isolate(input$DotClusterResolution)
       cds <- subset_Seurat(cds, idents = DotClusterOrder.Safe())
@@ -1153,18 +1179,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   # inform extra qc options for Gene symbol input
   output$Heatmaphints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing Heatmaphints.UI...")}
-    if (length(data$extra_qc_options) == 0) {
-      p("You can paste multiple genes from a column in excel.",
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    } else if(length(data$extra_qc_options) > 10){
-      p(paste0("Also supports: ", paste0(c(data$extra_qc_options[1:10], '...'), collapse = " "),
-               "; you can paste multiple genes from a column in excel."),
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    } else{
-      p(paste0("Also supports: ", paste0(data$extra_qc_options, collapse = " "),
-               "; you can paste multiple genes from a column in excel."),
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    }
+    p("You can paste multiple genes from a column in excel.",
+      style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
   # define slot Choice UI
@@ -1184,6 +1200,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   features_heatmap <- reactiveValues(features_current = NA, features_last = NA)
 
   observeEvent(input$HeatmapGeneSymbol,{
+    req(data$obj, input$HeatmapAssay)
     features_input <- CheckGene(InputGene = input$HeatmapGeneSymbol,
                                 GeneLibrary =  rownames(data$obj@assays[[input$HeatmapAssay]]))
     if (!identical(sort(features_heatmap$features_current), sort(features_input))) {
@@ -1374,18 +1391,8 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   output$AveragedHeatmaphints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing AveragedHeatmaphints.UI...")}
-    if (length(data$extra_qc_options) == 0) {
-      p("You can paste multiple genes from a column in excel.",
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    } else if(length(data$extra_qc_options) > 10){
-      p(paste0("Also supports: ", paste0(c(data$extra_qc_options[1:10], '...'), collapse = " "),
-               "; you can paste multiple genes from a column in excel."),
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    } else{
-      p(paste0("Also supports: ", paste0(data$extra_qc_options, collapse = " "),
-               "; you can paste multiple genes from a column in excel."),
-        style = "font-size: 12px; margin: 0; color: #004085;")
-    }
+    p("You can paste multiple genes from a column in excel.",
+      style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
   # only render plot when the inputs are really changed
@@ -1393,6 +1400,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
 
   observeEvent(input$AveragedHeatmapGeneSymbol,{
+    req(data$obj, input$AveragedHeatmapAssay)
     features_input <- CheckGene(InputGene = input$AveragedHeatmapGeneSymbol,
                                 GeneLibrary = rownames(data$obj@assays[[input$AveragedHeatmapAssay]]))
     if (!identical(sort(features_heatmap_averaged$features_current), sort(features_input))) {
@@ -1601,6 +1609,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   features_ridgeplot <- reactiveValues(features_current = NA, features_last = NA)
 
   observeEvent(input$RidgeplotGeneSymbol,{
+    req(data$obj, input$RidgeplotAssay)
     features_input <- CheckGene(InputGene = input$RidgeplotGeneSymbol,
                                 GeneLibrary = c(rownames(data$obj@assays[[input$RidgeplotAssay]]),
                                                 data$extra_qc_options))
@@ -2094,6 +2103,9 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   DEGs <- reactiveValues(degs = NULL, degs_ready = FALSE)
 
+  # Dynamic filter counter for multi-filter in Step 1 (DEGs for two groups)
+  degFilterState <- reactiveValues(count = 1)
+
   output$DEGs_ready <- reactive({
     return(DEGs$degs_ready)
   })
@@ -2197,35 +2209,94 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   })
 
   # Part-2: Find DEGs for two groups
-  # define Cluster Annotation choice
-  output$IntraClusterDEGsSubsetCells.UI <- renderUI({
-    # req(input$IntraClusterDEGsCustomizedGroups)
-    if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsSubsetCells.UI...")}
-    selectInput("IntraClusterDEGsSubsetCells","Filter Cells By:",
-                # choices = setdiff(data$cluster_options, input$IntraClusterDEGsCustomizedGroups))
-                choices = data$cluster_options)
+  # "+" button to add more filter rows (hidden when max reached)
+  observeEvent(input$IntraClusterDEGsAddFilter, {
+    degFilterState$count <- degFilterState$count + 1
+  }, ignoreInit = TRUE)
+
+  output$IntraClusterDEGsAddFilter.UI <- renderUI({
+    max_filters <- length(data$cluster_options) - 1L
+    if (degFilterState$count < max_filters) {
+      div(style = "margin-top: 8px;",
+        actionLink("IntraClusterDEGsAddFilter", label = NULL, icon = icon("plus-circle"),
+          style = "color: #3b82f6; font-size: 16px;"),
+        tags$span("Add filter condition", style = "color: #6c757d; font-size: 13px; margin-left: 4px;")
+      )
+    }
   })
 
-  # define Cluster Annotation choice
-  output$IntraClusterDEGsSubsetCellsSelectedClusters.UI <- renderUI({
-    # req(input$IntraClusterDEGsCustomizedGroups)
-    req(input$IntraClusterDEGsSubsetCells)
-    if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsSubsetCellsSelectedClusters.UI...")}
-    shinyWidgets::pickerInput(inputId = "IntraClusterDEGsSubsetCellsSelectedClusters", label = "Cells to Keep:",
-                              choices = levels(data$obj@meta.data[,input$IntraClusterDEGsSubsetCells]),
-                              selected = levels(data$obj@meta.data[,input$IntraClusterDEGsSubsetCells]),
-                              options = shinyWidgets::pickerOptions(actionsBox = TRUE,
-                                                                    size = 10,
-                                                                    selectedTextFormat = "count > 3"),
-                              multiple = TRUE)
+  # Pre-create remove button observers for rows 2-10
+  lapply(2:10, function(ii) {
+    observeEvent(input[[paste0("IntraClusterDEGsRemoveFilter_", ii)]], {
+      if (ii <= degFilterState$count) {
+        degFilterState$count <- degFilterState$count - 1
+      }
+    }, ignoreInit = TRUE)
   })
+
+  # Pre-create column-change observers for rows 1-10 (updates value picker choices)
+  lapply(1:10, function(ii) {
+    observeEvent(input[[paste0("IntraClusterDEGsSubsetCells_", ii)]], {
+      col <- input[[paste0("IntraClusterDEGsSubsetCells_", ii)]]
+      if (!is.null(col) && col %in% colnames(data$obj@meta.data)) {
+        shinyWidgets::updatePickerInput(session,
+          inputId = paste0("IntraClusterDEGsSubsetCellsValues_", ii),
+          choices = levels(data$obj@meta.data[, col]),
+          selected = levels(data$obj@meta.data[, col]))
+      }
+    }, ignoreInit = FALSE, ignoreNULL = TRUE)
+  })
+
+  # renderUI only depends on count - preserve existing selections via isolate()
+  output$IntraClusterDEGsFilterRows.UI <- renderUI({
+    if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsFilterRows.UI...")}
+    n <- degFilterState$count
+    if (!is.numeric(n) || length(n) != 1 || n < 0) n <- 1
+    lapply(seq_len(n), function(i) {
+      # Preserve current selections when count changes (add/remove rows)
+      cur_col <- isolate(input[[paste0("IntraClusterDEGsSubsetCells_", i)]])
+      cur_vals <- isolate(input[[paste0("IntraClusterDEGsSubsetCellsValues_", i)]])
+      # Determine choices for picker based on current (or default) column
+      eff_col <- if (!is.null(cur_col) && cur_col %in% colnames(data$obj@meta.data)) cur_col else data$cluster_options[1]
+      picker_choices <- levels(data$obj@meta.data[, eff_col])
+      picker_selected <- if (!is.null(cur_vals)) cur_vals else picker_choices
+
+      fluidRow(
+        column(5, selectInput(
+          paste0("IntraClusterDEGsSubsetCells_", i),
+          label = if (i == 1) "Filter Cells By:" else paste0("Filter ", i, " By:"),
+          choices = data$cluster_options,
+          selected = cur_col
+        )),
+        column(5, shinyWidgets::pickerInput(
+          inputId = paste0("IntraClusterDEGsSubsetCellsValues_", i),
+          label = "Keep:",
+          choices = picker_choices,
+          selected = picker_selected,
+          multiple = TRUE,
+          options = shinyWidgets::pickerOptions(actionsBox = TRUE, size = 10, selectedTextFormat = "count > 3")
+        )),
+        column(2, if (i > 1) actionLink(
+          paste0("IntraClusterDEGsRemoveFilter_", i),
+          label = NULL, icon = icon("times-circle"),
+          style = "color: #dc3545; font-size: 16px; margin-top: 25px;"
+        ))
+      )
+    })
+  })
+
 
   # define Cluster Annotation choice
   output$IntraClusterDEGsCustomizedGroups.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing IntraClusterDEGsCustomizedGroups.UI...")}
+    n <- degFilterState$count
+    if (!is.numeric(n) || length(n) != 1 || n < 0) n <- 1
+    filter_cols <- unique(unlist(lapply(seq_len(n), function(i) {
+      input[[paste0("IntraClusterDEGsSubsetCells_", i)]]
+    })))
+    filter_cols <- filter_cols[!is.null(filter_cols)]
     selectInput("IntraClusterDEGsCustomizedGroups","Group Cells By:",
-                choices = setdiff(data$cluster_options, input$IntraClusterDEGsSubsetCells))
-                # choices = data$cluster_options)
+                choices = setdiff(data$cluster_options, filter_cols))
   })
 
   # define the idents used
@@ -2252,9 +2323,18 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   # compare two groups, support subset clusters before comparison
   observeEvent(input$IntraClusterDEGssAnalysis, {
     if(verbose){message("SeuratExplorer: calculate DEGs...")}
+    # Check filter readiness
+    n <- degFilterState$count
+    if (!is.numeric(n) || length(n) != 1 || n < 0) n <- 1
+    filter_ready <- TRUE
+    for (i in seq_len(n)) {
+      if (is.null(input[[paste0("IntraClusterDEGsSubsetCellsValues_", i)]])) {
+        filter_ready <- FALSE; break
+      }
+    }
     if (any(is.null(input$IntraClusterDEGsCustomizedGroupsCase),
             is.null(input$IntraClusterDEGsCustomizedGroupsControl),
-            is.null(input$IntraClusterDEGsSubsetCellsSelectedClusters))) {
+            !filter_ready)) {
       showModal(modalDialog(
         title = tagList(icon("exclamation-triangle"), "Error"),
         tags$div(
@@ -2273,8 +2353,15 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
         size = "m"
       ))
       cds <- data$obj
-      Seurat::Idents(cds) <- input$IntraClusterDEGsSubsetCells
-      cds <- subset_Seurat(cds, idents = input$IntraClusterDEGsSubsetCellsSelectedClusters)
+      # Apply all filter conditions as intersection
+      for (i in seq_len(n)) {
+        col <- input[[paste0("IntraClusterDEGsSubsetCells_", i)]]
+        vals <- input[[paste0("IntraClusterDEGsSubsetCellsValues_", i)]]
+        if (!is.null(col) && !is.null(vals) && col %in% colnames(cds@meta.data)) {
+          keep_cells <- colnames(cds)[cds@meta.data[, col] %in% vals]
+          cds <- subset_Seurat(cds, cells = keep_cells)
+        }
+      }
       if (is.null(input$DEGsAssay)){
         if (DefaultAssay(cds) == 'SCT') {
           cds <- check_SCT_assay(cds)
@@ -2375,18 +2462,18 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
   })
 
 
-  # output$DEGs_row_selected <- reactive({
-  #   if (!DEGs$degs_ready) {
-  #     return(FALSE)
-  #   }else if(is.null(input$dataset_degs_rows_selected)){
-  #     return(FALSE)
-  #   }else{
-  #     return(TRUE)
-  #   }
-  # })
+  output$DEGs_row_selected <- reactive({
+    if (!DEGs$degs_ready) {
+      return(FALSE)
+    }else if(is.null(input$dataset_degs_rows_selected)){
+      return(FALSE)
+    }else{
+      return(TRUE)
+    }
+  })
 
-  # outputOptions(output, 'DEGs_row_selected', suspendWhenHidden=FALSE)
-  #
+  outputOptions(output, 'DEGs_row_selected', suspendWhenHidden=FALSE)
+
   # db <- SeuratExplorer::GenesDB
   #
   # output$ExternalLinks.UI <- renderUI({
@@ -2904,6 +2991,596 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                                                 list(extend = 'excel', title = "feature-correlation"))))
   })
 
+  ############################## Gene Based Cluster
+  # Assay slot UI
+  # define slot Choice UI
+  output$geneclustersAssaySlots.UI <- renderUI({
+    req(input$GeneclustersAssay)
+    if(verbose){message("SeuratExplorer: preparing geneclustersAssaySlots.UI...")}
+    slot_choices <- filter_slot(assay_info = data$assays_slots_options,
+                                assay_selected = input$GeneclustersAssay,
+                                allowed_slots = assay_allowed_slots[['GeneclustersAssay']])
+    selectInput("geneclustersSlot", "Slot:",
+                choices = slot_choices,
+                selected = ifelse('data' %in% slot_choices, 'data', slot_choices[1])) # default use data slot
+  })
+
+  # Reactive state
+  geneclusters_expr <- reactiveVal(NULL)
+  geneclusters_expr_gene <- reactiveVal(NULL)
+  geneclusters_cutoffs <- reactiveVal(NULL)
+  geneclusters_table_df <- reactiveVal(data.frame())
+  geneclusters_histogram_ready <- reactiveVal(FALSE)
+  geneclusters_table_ready <- reactiveVal(FALSE)
+
+  output$geneclusters_histogram_ready <- reactive({ geneclusters_histogram_ready() })
+  output$geneclusters_table_ready <- reactive({ geneclusters_table_ready() })
+  outputOptions(output, 'geneclusters_histogram_ready', suspendWhenHidden = FALSE)
+  outputOptions(output, 'geneclusters_table_ready', suspendWhenHidden = FALSE)
+
+  # Default placeholder histogram
+  output$geneclusters_histogram <- renderPlot({
+    ggplot2::ggplot() +
+      ggplot2::annotate('text', x = 0, y = 0, label = 'Enter a gene symbol, select assay/slot,\nthen click "Generate Histogram".',
+                        color = 'darkgrey', size = 6) +
+      ggplot2::theme_void()
+  })
+
+  # Generate histogram
+  observeEvent(input$geneclustersPlotHistogram, {
+    gene <- ReviseGene(Agene = trimws(input$geneclustersGeneSymbol),
+                       GeneLibrary = rownames(data$obj@assays[[input$GeneclustersAssay]]))
+    if (is.na(gene)) {
+      showModal(modalDialog(title = "Error", "Gene not found!", easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    geneclusters_expr_gene(gene)
+
+    # Extract expression
+    expr_df <- Seurat::FetchData(data$obj, vars = gene,
+                                 assay = input$GeneclustersAssay,
+                                 layer = input$geneclustersSlot)
+    vals <- expr_df[[1]]
+    # Exclude NA
+    vals <- vals[!is.na(vals)]
+    if (length(vals) == 0) {
+      showModal(modalDialog(title = "Error", "All expression values are NA for this gene.", easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    geneclusters_expr(vals)
+    geneclusters_cutoffs(NULL)
+    geneclusters_table_ready(FALSE)
+
+    output$geneclusters_histogram <- renderPlot({
+      p <- ggplot2::ggplot(data.frame(expr = geneclusters_expr()), ggplot2::aes(x = expr)) +
+        ggplot2::geom_histogram(bins = 50, fill = "#3b82f6", alpha = 0.7, color = "white") +
+        ggplot2::labs(x = gene, y = "Cell Count", title = paste("Expression of", gene)) +
+        ggplot2::theme_bw() +
+        ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"))
+      cuts <- geneclusters_cutoffs()
+      if (!is.null(cuts) && length(cuts) > 0) {
+        for (cval in cuts) {
+          p <- p + ggplot2::geom_vline(xintercept = cval, color = "#dc3545", linetype = "dashed", linewidth = 1)
+        }
+      }
+      p
+    })
+    geneclusters_histogram_ready(TRUE)
+  })
+
+  # Apply cutoffs
+  observeEvent(input$geneclustersApplyCutoffs, {
+    req(geneclusters_expr())
+
+    cuts_text <- trimws(unlist(strsplit(input$geneclustersCutoffs, ",")))
+    cuts <- suppressWarnings(as.numeric(cuts_text))
+    cuts <- cuts[!is.na(cuts)]
+    if (length(cuts) == 0) {
+      showModal(modalDialog(title = "Error", "Please enter valid numeric cutoff values separated by commas.", easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    cuts <- sort(cuts)
+    geneclusters_cutoffs(cuts)
+    n <- length(cuts)
+
+    # Build condition labels
+    conditions <- character(n + 1)
+    if (n == 1) {
+      conditions[1] <- paste0("<= ", cuts[1])
+      conditions[2] <- paste0("> ", cuts[1])
+    } else {
+      conditions[1] <- paste0("<= ", cuts[1])
+      for (i in seq_len(n - 1)) {
+        conditions[i + 1] <- paste0("> ", cuts[i], " & <= ", cuts[i + 1])
+      }
+      conditions[n + 1] <- paste0("> ", cuts[n])
+    }
+
+    df <- data.frame(condition = conditions, name = rep("-", n + 1), stringsAsFactors = FALSE)
+    geneclusters_table_df(df)
+    geneclusters_table_ready(TRUE)
+
+    # Update histogram with cutoff lines
+    gene <- geneclusters_expr_gene()
+    output$geneclusters_histogram <- renderPlot({
+      p <- ggplot2::ggplot(data.frame(expr = geneclusters_expr()), ggplot2::aes(x = expr)) +
+        ggplot2::geom_histogram(bins = 50, fill = "#3b82f6", alpha = 0.7, color = "white") +
+        ggplot2::geom_vline(xintercept = cuts, color = "#dc3545", linetype = "dashed", linewidth = 1) +
+        ggplot2::labs(x = gene, y = "Cell Count", title = paste("Expression of", gene)) +
+        ggplot2::theme_bw() +
+        ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"))
+      p
+    })
+
+    # Render editable table
+    output$geneclusters_table <- DT::renderDataTable({
+      DT::datatable(geneclusters_table_df(),
+        editable = list(target = 'cell', disable = list(columns = 0)),
+        selection = "single",
+        options = list(dom = 'lrtip', lengthChange = FALSE, pageLength = -1,
+          language = list(info = "Double click '-' to start edit. Only letters, numbers, whitespace, -, + and _ allowed.")),
+        rownames = FALSE)
+    })
+  })
+
+  # Track table edits
+  observeEvent(input$geneclusters_table_cell_edit, {
+    info <- input$geneclusters_table_cell_edit
+    new_df <- geneclusters_table_df()
+    new_df[info$row, info$col + 1] <- trimws(info$value)
+    geneclusters_table_df(new_df)
+  })
+
+  # Check / Validate
+  geneclusters_check_ok <- reactiveVal(FALSE)
+  geneclusters_new_anno <- reactiveVal(NULL)
+
+  observeEvent(input$geneclustersCheck, {
+    req(geneclusters_expr(), geneclusters_cutoffs(), geneclusters_expr_gene())
+    df <- geneclusters_table_df()
+    gene <- geneclusters_expr_gene()
+    new_col_name <- paste0(gene, "_cluster")
+
+    if ('-' %in% df$name) {
+      showModal(modalDialog(title = "Error", "'-' found in names. Please edit all levels.", easyClose = TRUE, footer = modalButton("OK")))
+      geneclusters_check_ok(FALSE)
+      return()
+    }
+    if ('' %in% trimws(df$name)) {
+      showModal(modalDialog(title = "Error", "Names cannot be empty!", easyClose = TRUE, footer = modalButton("OK")))
+      geneclusters_check_ok(FALSE)
+      return()
+    }
+    if (!all(sapply(df$name, check_allowed_chars))) {
+      err_names <- df$name[!sapply(df$name, check_allowed_chars)]
+      showModal(modalDialog(title = "Error",
+        HTML(paste(c("Unsupported characters found:", err_names), collapse = '<br>')),
+        easyClose = TRUE, footer = modalButton("OK"), size = "l"))
+      geneclusters_check_ok(FALSE)
+      return()
+    }
+    if (new_col_name %in% colnames(data$obj@meta.data)) {
+      showModal(modalDialog(title = "Error",
+        paste0("Column '", new_col_name, "' already exists in metadata. Please use a different gene or rename the existing column first."),
+        easyClose = TRUE, footer = modalButton("OK")))
+      geneclusters_check_ok(FALSE)
+      return()
+    }
+
+    # Classify cells
+    vals <- geneclusters_expr()
+    cuts <- geneclusters_cutoffs()
+    n <- length(cuts)
+
+    # Get cell names (non-NA expression)
+    expr_df <- Seurat::FetchData(data$obj, vars = gene,
+                                 assay = input$GeneclustersAssay,
+                                 layer = input$geneclustersSlot)
+    all_cells <- colnames(data$obj)
+    cell_has_expr <- !is.na(expr_df[[1]])
+    expr_cells <- all_cells[cell_has_expr]
+    expr_vals <- expr_df[[1]][cell_has_expr]
+
+    groups <- rep(NA_character_, length(expr_vals))
+    groups[expr_vals <= cuts[1]] <- df$name[1]
+    if (n >= 2) {
+      for (i in seq_len(n - 1)) {
+        idx <- expr_vals > cuts[i] & expr_vals <= cuts[i + 1]
+        groups[idx] <- df$name[i + 1]
+      }
+    }
+    groups[expr_vals > cuts[n]] <- df$name[n + 1]
+
+    # Store for submit
+    geneclusters_new_anno(list(
+      col_name = new_col_name,
+      cells = expr_cells,
+      groups = groups,
+      mapping_df = df
+    ))
+    geneclusters_check_ok(TRUE)
+    showModal(modalDialog(title = "Check Passed",
+      paste0("Column '", new_col_name, "' will be added with ", n+1, " groups."),
+      easyClose = TRUE, footer = modalButton("OK")))
+  })
+
+  # Submit / Add annotation
+  observeEvent(input$geneclustersSubmit, {
+    anno <- geneclusters_new_anno()
+    if (is.null(anno)) {
+      showModal(modalDialog(title = "Error", "Please run Check first.", easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    if (anno$col_name %in% colnames(data$obj@meta.data)) {
+      showModal(modalDialog(title = "Error", "Column already exists. Do not submit twice.", easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+
+    cds <- data$obj
+    new_col <- rep(NA_character_, ncol(cds))
+    names(new_col) <- colnames(cds)
+    new_col[anno$cells] <- anno$groups
+    cds@meta.data[, anno$col_name] <- new_col
+    cds@meta.data[, anno$col_name] <- factor(cds@meta.data[, anno$col_name],
+                                              levels = anno$mapping_df$name)
+
+    data$obj <- cds
+    data$cluster_options <- prepare_cluster_options(df = data$obj@meta.data,
+                                                    verbose = getOption('SeuratExplorerVerbose'))
+    data$split_options <- prepare_split_options(df = data$obj@meta.data,
+                                                max.level = data$split_maxlevel,
+                                                verbose = getOption('SeuratExplorerVerbose'))
+    data$version <- data$version + 1
+
+    showModal(modalDialog(title = "Success",
+      paste0("Annotation '", anno$col_name, "' added to metadata!"),
+      easyClose = TRUE, footer = modalButton("Continue")))
+    showNotification(ui = tagList(icon("check-circle"), "Gene-based clusters added!"),
+      type = "message", duration = 5)
+  })
+
+  # Download
+  output$geneclustersDownload <- downloadHandler(
+    filename = function() { "gene_cluster_mapping.csv" },
+    content = function(file) {
+      anno <- geneclusters_new_anno()
+      if (is.null(anno)) {
+        write.csv(data.frame(), file, row.names = FALSE)
+      } else {
+        df <- anno$mapping_df
+        colnames(df) <- c("condition", anno$col_name)
+        write.csv(df, file, row.names = FALSE)
+      }
+    }
+  )
+
+  ############################## Module Score
+  # Reactive state
+  modulescore_valid_genes <- reactiveVal(NULL)
+  modulescore_checked <- reactiveVal(FALSE)
+
+  # Name input and submit button (shown after gene check passes)
+  output$ModuleScoreName.UI <- renderUI({
+    if (!modulescore_checked()) return(NULL)
+    div(style = "margin-top: 15px;",
+      textInput("ModuleScoreName", "Score Name:", value = "",
+        placeholder = "e.g. T_cell_signature",
+        width = '100%'),
+      div(style = "background: #e9ecef; padding: 5px; border-radius: 4px; margin-top: 4px;",
+        p("Only letters, numbers, and underscore allowed.", style = "font-size: 11px; margin: 0; color: #6c757d;"))
+    )
+  })
+
+  output$ModuleScoreSubmit.UI <- renderUI({
+    if (!modulescore_checked()) return(NULL)
+    div(style = "margin-top: 10px;",
+      actionButton("ModuleScoreCompute", label = "Compute Module Score",
+        icon = icon("calculator"), class = "btn-success",
+        style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;")
+    )
+  })
+
+  output$ModuleScoreResult.UI <- renderUI({ NULL })
+
+  # Gene check
+  observeEvent(input$ModuleScoreCheckGenes, {
+    req(input$ModuleScoreFeatures, input$ModuleScoreAssay)
+    gene_lib <- rownames(data$obj@assays[[input$ModuleScoreAssay]])
+    input_genes <- trimws(unlist(strsplit(input$ModuleScoreFeatures, "\n")))
+    input_genes <- input_genes[input_genes != ""]
+    if (length(input_genes) == 0) {
+      showModal(modalDialog(title = "Error", "Please enter at least one gene symbol.",
+        easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    # Check each gene individually
+    matched <- sapply(input_genes, function(g) ReviseGene(g, gene_lib))
+    found_mask <- !is.na(matched)
+    found_genes <- unique(unname(matched[found_mask]))
+    missing_genes <- input_genes[!found_mask]
+
+    if (length(found_genes) == 0) {
+      showModal(modalDialog(title = "Error",
+        "None of the input genes were found in the selected assay.",
+        easyClose = TRUE, footer = modalButton("OK")))
+      modulescore_checked(FALSE)
+    } else if (length(missing_genes) > 0) {
+      showModal(modalDialog(
+        title = "Partial Match",
+        tagList(
+          p(paste0(length(found_genes), " gene(s) found, ", length(missing_genes), " gene(s) not found.")),
+          p(strong("Not found:"), paste(head(missing_genes, 10), collapse = ", "),
+            if (length(missing_genes) > 10) paste0(" ... and ", length(missing_genes) - 10, " more")),
+          p("Continue with the found genes?")
+        ),
+        footer = tagList(
+          actionButton("ModuleScoreContinue", "Continue", class = "btn-primary"),
+          modalButton("Cancel")
+        ),
+        easyClose = TRUE, size = "m"
+      ))
+      modulescore_valid_genes(found_genes)
+    } else {
+      modulescore_valid_genes(found_genes)
+      modulescore_checked(TRUE)
+      showNotification("All genes found! Enter a name and click Compute.", type = "message", duration = 5)
+    }
+  })
+
+  # Continue after partial match
+  observeEvent(input$ModuleScoreContinue, {
+    removeModal()
+    modulescore_checked(TRUE)
+    showNotification("Enter a name and click Compute Module Score.", type = "message", duration = 5)
+  }, ignoreInit = TRUE)
+
+  # Compute module score
+  observeEvent(input$ModuleScoreCompute, {
+    req(modulescore_valid_genes(), input$ModuleScoreName)
+    name <- trimws(input$ModuleScoreName)
+    genes <- modulescore_valid_genes()
+
+    # Validate name
+    if (name == "") {
+      showModal(modalDialog(title = "Error", "Score name cannot be empty.", easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    if (!check_allowed_chars(name, allowed_characters = "[^a-zA-Z0-9_]")) {
+      showModal(modalDialog(title = "Error",
+        "Name contains invalid characters. Only letters, numbers, and underscore allowed.",
+        easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    full_col_name <- paste0(name, "1")
+    if (name %in% colnames(data$obj@meta.data)) {
+      showModal(modalDialog(title = "Error",
+        paste0("Column '", name, "' already exists. Choose a different name."),
+        easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+
+    showModal(modalDialog(title = "Calculating", "Computing module score...", footer = NULL, size = "m"))
+    result <- tryCatch({
+      cds <- data$obj
+      Seurat::AddModuleScore(object = cds, features = list(genes),
+                             name = name, assay = input$ModuleScoreAssay)
+    }, error = function(e) { return(e) })
+    removeModal()
+
+    if (inherits(result, "error")) {
+      showModal(modalDialog(title = "Error",
+        tagList(p("AddModuleScore failed:"), tags$pre(result$message)),
+        easyClose = TRUE, footer = modalButton("OK"), size = "l"))
+    } else {
+      # Rename column from {name}1 to {name}
+      colnames(result@meta.data)[colnames(result@meta.data) == full_col_name] <- name
+      data$obj <- result
+
+      # Update options
+      data$extra_qc_options <- prepare_qc_options(df = data$obj@meta.data,
+                                                  types = c("double","integer","numeric"),
+                                                  verbose = getOption('SeuratExplorerVerbose'))
+      data$version <- data$version + 1
+
+      showModal(modalDialog(
+        title = tagList(icon("check-circle", style = "color: #28a745;"), "Success"),
+        tagList(
+          p(paste0("Module score '", name, "' computed successfully!")),
+          p("You can now explore this score in:",
+            tags$ul(
+              tags$li("Feature Plot - enter '", tags$b(name), "' in Gene Symbol"),
+              tags$li("Violin Plot - enter '", tags$b(name), "' in Gene Symbol"),
+              tags$li("Ridge Plot - enter '", tags$b(name), "' in Gene Symbol")
+            ))
+        ),
+        easyClose = TRUE, footer = modalButton("OK"), size = "m"
+      ))
+      modulescore_checked(FALSE)
+      modulescore_valid_genes(NULL)
+      shinyjs::reset("ModuleScoreFeatures")
+    }
+  })
+
+  ############################## Combination Based Cluster
+  # First cluster resolution selector
+  output$CombinedClusterResolution.UI <- renderUI({
+    if(verbose){message("SeuratExplorer: preparing CombinedClusterResolution.UI...")}
+    selectInput("CombinedClusterResolution", "First Cluster:",
+                choices = data$cluster_options)
+  })
+
+  # Second cluster resolution selector (exclude the first selection)
+  output$CombinedClusterResolutionSecond.UI <- renderUI({
+    req(input$CombinedClusterResolution)
+    if(verbose){message("SeuratExplorer: preparing CombinedClusterResolutionSecond.UI...")}
+    selectInput("CombinedClusterResolutionSecond", "Second Cluster:",
+                choices = setdiff(data$cluster_options, input$CombinedClusterResolution))
+  })
+
+  # Reactive state
+  combinedclusters_df <- reactiveVal(data.frame())
+  combinedclusters_generated <- reactiveVal(FALSE)
+  combinedclusters_new_col <- reactiveVal("")
+
+  # Default empty table (shown before Generate)
+  output$combinedclusters_table <- DT::renderDataTable({
+    DT::datatable(combinedclusters_df(),
+      editable = list(target = 'cell', disable = list(columns = c(0, 1, 2))),
+      selection = "single",
+      options = list(dom = 'lrtip', lengthChange = FALSE, pageLength = -1,
+        language = list(info = "Double click the NewName column to edit.")),
+      rownames = FALSE)
+  })
+
+  # Name input + submit UI (shown after generate)
+  output$combinedclustersName.UI <- renderUI({
+    if (!combinedclusters_generated()) return(NULL)
+    default_name <- paste0(gsub("[^a-zA-Z0-9_]", "", input$CombinedClusterResolution),
+                           "_",
+                           gsub("[^a-zA-Z0-9_]", "", input$CombinedClusterResolutionSecond))
+    div(style = "margin-top: 15px;",
+      textInput("combinedclustersNewName", "New Cluster Name:",
+        value = default_name, width = '100%'),
+      div(style = "background: #e9ecef; padding: 5px; border-radius: 4px; margin-top: 4px;",
+        p("Only letters, numbers, and underscore allowed.", style = "font-size: 11px; margin: 0; color: #6c757d;"))
+    )
+  })
+
+  output$combinedclustersSubmit.UI <- renderUI({
+    if (!combinedclusters_generated()) return(NULL)
+    div(style = "margin-top: 10px;",
+      actionButton("combinedclustersSubmit", label = "Submit",
+        icon = icon("upload"), class = "btn-success",
+        style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;"),
+      div(style = "margin-top: 10px;",
+        downloadButton("combinedclustersDownload", "Download Mapping",
+          icon = icon("file-arrow-down"), class = "btn-warning",
+          style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;")
+      )
+    )
+  })
+
+  # Generate combination table
+  observeEvent(input$combinedclustersGenerate, {
+    req(input$CombinedClusterResolution, input$CombinedClusterResolutionSecond)
+    res1 <- input$CombinedClusterResolution
+    res2 <- input$CombinedClusterResolutionSecond
+    if (res1 == res2) {
+      showModal(modalDialog(title = "Error", "The two clusters must be different.",
+        easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+
+    meta <- data$obj@meta.data
+    lev1 <- levels(meta[, res1])
+    lev2 <- levels(meta[, res2])
+
+    # All combinations in order (res1 slowest, res2 fastest)
+    combos <- expand.grid(lev1, lev2, stringsAsFactors = FALSE)
+    colnames(combos) <- c("V1", "V2")
+
+    # Count cells for each combination
+    res1_vals <- as.character(meta[, res1])
+    res2_vals <- as.character(meta[, res2])
+    cell_counts <- mapply(function(a, b) {
+      sum(res1_vals == a & res2_vals == b, na.rm = TRUE)
+    }, combos$V1, combos$V2)
+
+    connector <- input$CombinedClusterConnector
+    new_names <- paste0(combos$V1, connector, combos$V2)
+
+    df <- data.frame(
+      Cluster1 = combos$V1,
+      Cluster2 = combos$V2,
+      CellCount = cell_counts,
+      NewName = new_names,
+      stringsAsFactors = FALSE
+    )
+    # Keep only non-empty combinations
+    df <- df[df$CellCount > 0, ]
+
+    combinedclusters_df(df)
+    combinedclusters_generated(TRUE)
+    combinedclusters_new_col(paste0(res1, "_", res2))
+  })
+
+  # Track table edits (NewName column)
+  observeEvent(input$combinedclusters_table_cell_edit, {
+    info <- input$combinedclusters_table_cell_edit
+    new_df <- combinedclusters_df()
+    new_df[info$row, info$col + 1] <- trimws(info$value)
+    combinedclusters_df(new_df)
+  })
+
+  # Submit - validate and add annotation
+  observeEvent(input$combinedclustersSubmit, {
+    req(combinedclusters_generated())
+    new_col_name <- trimws(input$combinedclustersNewName)
+
+    if (new_col_name == "") {
+      showModal(modalDialog(title = "Error", "Cluster name cannot be empty.",
+        easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    if (!check_allowed_chars(new_col_name, allowed_characters = "[^a-zA-Z0-9_]")) {
+      showModal(modalDialog(title = "Error",
+        "Name contains invalid characters. Only letters, numbers, and underscore allowed.",
+        easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+    if (new_col_name %in% colnames(data$obj@meta.data)) {
+      showModal(modalDialog(title = "Error",
+        paste0("Column '", new_col_name, "' already exists in metadata."),
+        easyClose = TRUE, footer = modalButton("OK")))
+      return()
+    }
+
+    df <- combinedclusters_df()
+    res1 <- input$CombinedClusterResolution
+    res2 <- input$CombinedClusterResolutionSecond
+    connector <- input$CombinedClusterConnector
+
+    cds <- data$obj
+    meta <- cds@meta.data
+    res1_vals <- as.character(meta[, res1])
+    res2_vals <- as.character(meta[, res2])
+
+    # Build mapping: original combo -> new name
+    old_combo <- paste0(res1_vals, connector, res2_vals)
+    # NewName was auto-generated as old_combo; user may have edited
+    mapping <- setNames(df$NewName, paste0(df$Cluster1, connector, df$Cluster2))
+
+    new_annotation <- mapping[old_combo]
+    new_annotation[is.na(new_annotation)] <- NA_character_
+    cds@meta.data[, new_col_name] <- factor(new_annotation, levels = df$NewName)
+
+    data$obj <- cds
+    data$cluster_options <- prepare_cluster_options(df = data$obj@meta.data,
+                                                    verbose = getOption('SeuratExplorerVerbose'))
+    data$split_options <- prepare_split_options(df = data$obj@meta.data,
+                                                max.level = data$split_maxlevel,
+                                                verbose = getOption('SeuratExplorerVerbose'))
+    data$version <- data$version + 1
+
+    showModal(modalDialog(
+      title = tagList(icon("check-circle", style = "color: #28a745;"), "Success"),
+      paste0("Annotation '", new_col_name, "' added to metadata!"),
+      easyClose = TRUE, footer = modalButton("Continue")))
+    showNotification(ui = tagList(icon("check-circle"), "Combination clusters added!"),
+      type = "message", duration = 5)
+  })
+
+  # Download mapping
+  output$combinedclustersDownload <- downloadHandler(
+    filename = function() { "combination_cluster_mapping.csv" },
+    content = function(file) {
+      df <- combinedclusters_df()
+      colnames(df) <- c(input$CombinedClusterResolution, input$CombinedClusterResolutionSecond,
+                        "CellCount", "NewName")
+      write.csv(df, file, row.names = FALSE)
+    }
+  )
+
   ############################## Rename Clusters
   cell_annotation_df <- reactiveVal(data.frame())
 
@@ -2920,7 +3597,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
                   editable = list(target = 'cell', disable = list(columns = 0)), # Disables columns 1
                   selection = "single",
                   options = list(dom = 'lrtip', lengthChange = FALSE, pageLength = -1,
-                                 language = list(info = "Double click '-' to start edit, only support letters, numbers, whitespace, - and _.")),
+                                 language = list(info = "Double click '-' to start edit, only support letters, numbers, whitespace, -, + and _.")),
                   rownames = FALSE
                   )
   })
@@ -2970,7 +3647,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
     }else if (!all(sapply(cell_annotation_df()$New_Name, check_allowed_chars))) {
       error_names <- cell_annotation_df()$New_Name[!sapply(cell_annotation_df()$New_Name, check_allowed_chars)]
       showModal(modalDialog(title = tagList(icon("exclamation-triangle"), "Error"),
-                            HTML(paste(c("Unsupported character found in New_Name! only support letters, numbers, whitespace, - and _. Please check names bellow:", error_names),
+                            HTML(paste(c("Unsupported character found in New_Name! only support letters, numbers, whitespace, -, + and _. Please check names bellow:", error_names),
                                   collapse = '<br>')),
                             footer= modalButton("Dismiss"),
                             easyClose = TRUE,
@@ -3024,7 +3701,7 @@ explorer_server <- function(input, output, session, data, verbose=FALSE){
 
   output$renameclustersNewClusterNamehints.UI <- renderUI({
     if(verbose){message("SeuratExplorer: preparing renameclustersNewClusterNamehints.UI...")}
-    p(paste0("Avoid using already existed column names in meta data. And only support letters, numbers, -, whitespace, _, whitespace at botch ends will be removed automatically!"),
+    p(paste0("Avoid using already existed column names in meta data. And only support letters, numbers, whitespace, -, +, _; Whitespace at botch ends will be removed automatically!"),
       style = "font-size: 12px; margin: 0; color: #004085;")
   })
 
@@ -3184,7 +3861,10 @@ server <- function(input, output, session) {
                         assay_default = 'RNA',
                         cluster_options = NULL,
                         cluster_default = NULL,
+                        gene_annotations_list = NULL,
                         assay_slots = c('counts', 'data', 'scale.data'),
+                        assays_options = NULL,
+                        assays_slots_options = NULL,
                         split_maxlevel = getOption("SeuratExplorerSplitOptionMaxLevel"),
                         split_options = NULL,
                         extra_qc_options = NULL,
@@ -3211,7 +3891,8 @@ server <- function(input, output, session) {
       shinyjs::reset('dataset_file')
     }else{
       obj <- tryCatch({
-        readSeurat(path = input$dataset_file$datapath, verbose = getOption('SeuratExplorerVerbose'))
+        updateSeurat(readSeurat(path = input$dataset_file$datapath, verbose = getOption('SeuratExplorerVerbose')),
+                     verbose = getOption('SeuratExplorerVerbose'))
       }, error = function(e) {
         return(FALSE)
       })
@@ -3244,7 +3925,7 @@ server <- function(input, output, session) {
       } else {
         data$Path <- input$dataset_file$datapath
 
-        data$obj <- prepare_seurat_object(obj = updateSeurat(obj, verbose = getOption('SeuratExplorerVerbose')),
+        data$obj <- prepare_seurat_object(obj = obj,
                                           verbose = getOption('SeuratExplorerVerbose'))
 
         data$reduction_options <- prepare_reduction_options(obj = data$obj,
@@ -3277,6 +3958,8 @@ server <- function(input, output, session) {
         data$extra_qc_options <- prepare_qc_options(df = data$obj@meta.data,
                                                     types = c("double","integer","numeric"),
                                                     verbose = getOption('SeuratExplorerVerbose'))
+
+        check_data(data = data)
       }
 
     }

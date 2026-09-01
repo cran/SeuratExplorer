@@ -19,26 +19,52 @@ explorer_sidebar_ui <- function(){
   # to make shinyBS::updateCollapse() runs correctly, refer to: https://github.com/ebailey78/shinyBS/issues/92
   shiny::addResourcePath("sbs", system.file("www", package="shinyBS"))
 
+  # Tooltip texts for each menu item (hover to show)
+  tooltips <- c(
+    dimplot = "Visualize cells in reduced dimensions (UMAP / t-SNE / PCA), colored by cluster or split by metadata.",
+    featureplot = "Overlay gene expression values on a dimensionality reduction plot.",
+    vlnplot = "Compare gene expression distributions across clusters.",
+    dotplot = "Show expression percentage and average level across clusters in a dot matrix.",
+    heatmap = "Gene expression heatmap at single-cell level.",
+    averagedheatmap = "Gene expression heatmap averaged per cluster.",
+    ridgeplot = "Gene expression density ridges across clusters.",
+    cellratioplot = "Cell-type proportion across samples or groups.",
+    degs = "Find marker genes per cluster or differential genes between two groups.",
+    topgenes = "Find highly expressed genes per cluster.",
+    featuresummary = "Summarize gene expression (mean / median / percentage) per cluster.",
+    featurecorrelation = "Calculate gene-gene expression correlations.",
+    renameclusters = "Interactively rename cluster labels.",
+    geneclusters = "Group cells by a gene's expression level with custom cutoffs.",
+    combinedclusters = "Combine two cluster annotations into a new grouping.",
+    addmodulescore = "Score cells with a gene set using AddModuleScore.",
+    featuresdf = "Search and browse feature / gene names across assays.",
+    cellmetadata = "Browse and download cell-level metadata.",
+    objectstructure = "Inspect the structure of the Seurat object."
+  )
+
   conditionalPanel(
     condition = "output.file_loaded",
     sidebarMenu(menuItem(text = "Explorer", tabName = "explorer", icon = shiny::icon("dashboard"), startExpanded = TRUE,
-                         menuSubItem(text = "Dimensional Reduction Plot", tabName = "dimplot", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Feature Plot", tabName = "featureplot", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Violin Plot", tabName = "vlnplot", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Dot Plot", tabName = "dotplot", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Heatmap Cell Level", tabName = "heatmap", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Heatmap Group Averaged", tabName = "averagedheatmap", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Ridge Plot", tabName = "ridgeplot", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Cell Percentage Plot", tabName = "cellratioplot", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "DEGs Analysis", tabName = "degs", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Top Expressed Features", tabName = "topgenes", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Feature Summary", tabName = "featuresummary", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Feature Correlation", tabName = "featurecorrelation", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Rename Clusters", tabName = "renameclusters", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Search Features", tabName = "featuresdf", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Cells Metadata", tabName = "cellmetadata", icon = shiny::icon("angle-double-right")),
-                         menuSubItem(text = "Object Structure", tabName = "objectstructure", icon = shiny::icon("angle-double-right"))
-                         # menuSubItem(text = "About", tabName = "about", icon = shiny::icon("angle-double-right"))
+                         menuSubItem(text = span(title = tooltips[["dimplot"]], "Dim Reduction Plot", tags$small(class = "label label-danger", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "HOT")), tabName = "dimplot", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["featureplot"]], "Feature Plot", tags$small(class = "label label-danger", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "HOT")), tabName = "featureplot", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["vlnplot"]], "Violin Plot", tags$small(class = "label label-danger", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "HOT")), tabName = "vlnplot", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["dotplot"]], "Dot Plot", tags$small(class = "label label-success", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "UPDATED")), tabName = "dotplot", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["heatmap"]], "Heatmap Cell Level"), tabName = "heatmap", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["averagedheatmap"]], "Heatmap Group Averaged"), tabName = "averagedheatmap", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["ridgeplot"]], "Ridge Plot"), tabName = "ridgeplot", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["cellratioplot"]], "Cell Percentage Plot"), tabName = "cellratioplot", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["degs"]], "DEGs Analysis", tags$small(class = "label label-danger", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "HOT")), tabName = "degs", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["topgenes"]], "Top Expressed Features"), tabName = "topgenes", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["featuresummary"]], "Feature Summary"), tabName = "featuresummary", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["featurecorrelation"]], "Feature Correlation"), tabName = "featurecorrelation", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["renameclusters"]], "Rename Clusters"), tabName = "renameclusters", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["geneclusters"]], "Gene Based Cluster", tags$small(class = "label label-info", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "BETA")), tabName = "geneclusters", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["combinedclusters"]], "Combination Based Cluster", tags$small(class = "label label-info", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "BETA")), tabName = "combinedclusters", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["addmodulescore"]], "Module Score", tags$small(class = "label label-info", style = "margin-left: 4px; font-size: 8px; padding: 1px 3px;", "BETA")), tabName = "addmodulescore", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["featuresdf"]], "Search Features"), tabName = "featuresdf", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["cellmetadata"]], "Cells Metadata"), tabName = "cellmetadata", icon = shiny::icon("angle-right")),
+                         menuSubItem(text = span(title = tooltips[["objectstructure"]], "Object Structure"), tabName = "objectstructure", icon = shiny::icon("angle-right"))
+                         # menuSubItem(text = "About", tabName = "about", icon = shiny::icon("angle-right"))
                          )
                 )
     )
@@ -72,30 +98,30 @@ explorer_body_ui <- function(tab_list){
                                         ),
                                         solidHeader = TRUE, status = "primary", width = 3,
                                         # Data Selection Group
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("database"), "Data Selection", style = "color: #3b82f6; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                        param_group_collapse(
+                                          id = "dimplot_data", title = "Data Selection",
+                                          icon_name = "database", color = "#3b82f6",
                                           withSpinner(uiOutput("DimDimensionReduction.UI"), proxy.height = "10px"),
                                           withSpinner(uiOutput("DimClusterResolution.UI"), proxy.height = "10px")
                                         ),
                                         # Display Options Group
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("eye"), "Display Options", style = "color: #10b981; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                        param_group_collapse(
+                                          id = "dimplot_display", title = "Display Options",
+                                          icon_name = "eye", color = "#10b981",
                                           checkboxInput("DimShowLabel",label = "Show cluster label", TRUE),
                                           checkboxInput("DimShowLegend",label = "Show legend", TRUE)
                                         ),
                                         # Size Settings Group
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("adjust"), "Size Settings", style = "color: #f59e0b; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                        param_group_collapse(
+                                          id = "dimplot_size", title = "Size Settings",
+                                          icon_name = "adjust", color = "#f59e0b",
                                           sliderInput("DimLabelSize", label = "Label Size:", min = 0, max = 10, value = 7),
                                           sliderInput("DimPointSize", label = "Point Size:", min = 0.001, max = 2, value = 0.8)
                                         ),
                                         # Advanced Options
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #6b7280; border-left: 4px solid #6b7280; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("cogs"), "Advanced Options", style = "color: #6b7280; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                        param_group_collapse(
+                                          id = "dimplot_advanced", title = "Advanced Options",
+                                          icon_name = "cogs", color = "#6b7280",
                                           withSpinner(uiOutput("DimSplit.UI"), proxy.height = "10px"),
                                           withSpinner(uiOutput("DimHighlightedClusters.UI"), proxy.height = "10px"),
                                           bsCollapse(id = "collapseDimplot", open = "Change Cluster Order",
@@ -120,10 +146,10 @@ explorer_body_ui <- function(tab_list){
                                               style = "display: flex; align-items: center; gap: 8px; color: white;"
                                             ),
                                             solidHeader = TRUE, status = "primary", width = 3,
-                                            # Gene Input Group
-                                            div(
-                                              style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                              h5(icon("dna"), "Gene Selection", style = "color: #3b82f6; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                            # Gene Selection Group
+                                            param_group_collapse(
+                                              id = "featureplot_gene", title = "Gene Selection",
+                                              icon_name = "dna", color = "#3b82f6",
                                               textAreaInput("FeatureGeneSymbol", "Gene Symbol:", value = "", height = '80px', resize = "vertical"),
                                               div(
                                                 style = "background-color: #e9ecef; border: 1px solid #3b82f6; padding: 5px; border-radius: 4px; margin-top: 5px; margin-bottom: 10px;",
@@ -131,33 +157,33 @@ explorer_body_ui <- function(tab_list){
                                               )
                                             ),
                                             # Data Selection Group
-                                            div(
-                                              style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                              h5(icon("database"), "Data Selection", style = "color: #10b981; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                            param_group_collapse(
+                                              id = "featureplot_data", title = "Data Selection",
+                                              icon_name = "database", color = "#10b981",
                                               withSpinner(uiOutput("FeatureDimensionReduction.UI"), proxy.height = "10px"),
                                               withSpinner(uiOutput("FeatureAssays.UI"), proxy.height = "10px"),
                                               withSpinner(uiOutput("FeatureAssaySlots.UI"), proxy.height = "10px"),
                                               withSpinner(uiOutput("FeatureClusterResolution.UI"), proxy.height = "10px")
                                             ),
                                             # Display Options Group
-                                            div(
-                                              style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                              h5(icon("eye"), "Display Options", style = "color: #f59e0b; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                            param_group_collapse(
+                                              id = "featureplot_display", title = "Display Options",
+                                              icon_name = "eye", color = "#f59e0b",
                                               checkboxInput("FeatureShowLabel",label = "Show cluster label", FALSE),
                                               withSpinner(uiOutput("FeatureSplit.UI"), proxy.height = "10px"),
                                               sliderInput("FeatureLabelSize", label = "Label Size:", min = 1, max = 12, value = 4)
                                             ),
                                             # Color Settings Group
-                                            div(
-                                              style = "background: #f8f9fa; border: 1px solid #8b5cf6; border-left: 4px solid #8b5cf6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                              h5(icon("palette"), "Color Settings", style = "color: #8b5cf6; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                            param_group_collapse(
+                                              id = "featureplot_color", title = "Color Settings",
+                                              icon_name = "palette", color = "#8b5cf6",
                                               colourpicker::colourInput("FeaturePlotLowestExprColor", "Lowest expression color:", "#E5E5E5", palette = "limited"),
                                               colourpicker::colourInput("FeaturePlotHighestExprColor", "Highest expression color:", "#FF0000", palette = "limited")
                                             ),
                                             # Advanced Settings Group
-                                            div(
-                                              style = "background: #f8f9fa; border: 1px solid #6b7280; border-left: 4px solid #6b7280; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                              h5(icon("cogs"), "Advanced Settings", style = "color: #6b7280; font-size: 14px; font-weight: 600; margin-bottom: 10px;"),
+                                            param_group_collapse(
+                                              id = "featureplot_advanced", title = "Advanced Settings",
+                                              icon_name = "cogs", color = "#6b7280",
                                               sliderInput("FeaturePointAlpha", label = "Point Alpha:", min = 0.1, max = 1, value = 1),
                                               sliderInput("FeatureMinCutoff", label = "Min expression cutoff (%):", min = 0, max = 100, value = 0),
                                               sliderInput("FeatureMaxCutoff", label = "Max expression cutoff (%):", min = 0, max = 100, value = 100),
@@ -182,9 +208,9 @@ explorer_body_ui <- function(tab_list){
                                         solidHeader = TRUE, status = "primary", width = 3,
 
                                         # Data Selection
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("database"), "Data Selection", style = "color: #3b82f6; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "vlnplot_data", title = "Data Selection",
+                                          icon_name = "database", color = "#3b82f6",
                                           textAreaInput("VlnGeneSymbol", "Gene Symbols:", value = "", height = '80px', resize = "vertical"),
                                           div(
                                             style = "background-color: #e9ecef; border: 1px solid #3b82f6; padding: 5px; border-radius: 4px; margin-top: 5px; margin-bottom: 10px;",
@@ -196,9 +222,9 @@ explorer_body_ui <- function(tab_list){
                                         ),
 
                                         # Cluster Settings
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("layer-group"), "Cluster Settings", style = "color: #10b981; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "vlnplot_cluster", title = "Cluster Settings",
+                                          icon_name = "layer-group", color = "#10b981",
                                           withSpinner(uiOutput("VlnClusterResolution.UI"), proxy.height = "10px"),
                                           withSpinner(uiOutput("VlnIdentsSelected.UI"), proxy.height = "10px"),
                                           bsCollapse(id = "collapseVlnplot", open = "0",
@@ -208,9 +234,9 @@ explorer_body_ui <- function(tab_list){
                                         ),
 
                                         # Plot Options
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("sliders-h"), "Plot Options", style = "color: #f59e0b; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "vlnplot_plot", title = "Plot Options",
+                                          icon_name = "sliders-h", color = "#f59e0b",
                                           conditionalPanel(
                                             condition = "output.Vlnplot_splitoption_twolevels",
                                             checkboxInput("VlnSplitPlot",label = "Split Plot", FALSE)
@@ -224,11 +250,11 @@ explorer_body_ui <- function(tab_list){
                                             checkboxInput("VlnFlipPlot",label = "Flip Plot", FALSE)
                                           ),
                                           conditionalPanel(
-                                            condition = "output.Vlnplot_StackPlot && input.VlnSplitBy == 'None'", # only work when split is set to NULL
+                                            condition = "output.Vlnplot_StackPlot && input.VlnSplitBy == 'None'",
                                             selectInput("VlnFillBy","Color By:", choices = c(Feature = "feature", Cluster = "ident")),
                                           ),
                                           conditionalPanel(
-                                            condition = "input.VlnSplitBy == 'None'", # only work when split is set to NULL
+                                            condition = "input.VlnSplitBy == 'None'",
                                             selectInput("Vlnfillcolorplatte","select color plate:", choices = color_choice_vector, selected = "Default")
                                           ),
                                           sliderInput("VlnPointSize", label = "Point Size:", min = 0, max = 4, value = 0),
@@ -255,9 +281,9 @@ explorer_body_ui <- function(tab_list){
                                         solidHeader = TRUE, status = "primary", width = 3,
 
                                         # Data Selection
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("database"), "Data Selection", style = "color: #3b82f6; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "dotplot_data", title = "Data Selection",
+                                          icon_name = "database", color = "#3b82f6",
                                           textAreaInput("DotGeneSymbol", "Gene Symbols:", value = "", height = '80px', resize = "vertical"),
                                           div(
                                             style = "background-color: #e9ecef; border: 1px solid #3b82f6; padding: 5px; border-radius: 4px; margin-top: 5px; margin-bottom: 10px;",
@@ -268,9 +294,9 @@ explorer_body_ui <- function(tab_list){
                                         ),
 
                                         # Cluster Settings
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("layer-group"), "Cluster Settings", style = "color: #10b981; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "dotplot_cluster", title = "Cluster Settings",
+                                          icon_name = "layer-group", color = "#10b981",
                                           withSpinner(uiOutput("DotClusterResolution.UI"), proxy.height = "10px"),
                                           withSpinner(uiOutput("DotIdentsSelected.UI"), proxy.height = "10px"),
                                           bsCollapse(id = "collapseDotplot", open = "0",
@@ -280,10 +306,18 @@ explorer_body_ui <- function(tab_list){
                                           checkboxInput("DotClusterIdents",label = "Cluster the Clusters", FALSE)
                                         ),
 
+                                        # Filter Cells
+                                        param_group_collapse(
+                                          id = "dotplot_filter", title = "Filter Cells",
+                                          icon_name = "filter", color = "#8b5cf6",
+                                          withSpinner(uiOutput("IntraClusterDotplotSubsetCells.UI"), proxy.height = "10px"),
+                                          withSpinner(uiOutput("IntraClusterDotplotSubsetCellsSelectedClusters.UI"), proxy.height = "10px")
+                                        ),
+
                                         # Plot Options
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("sliders-h"), "Plot Options", style = "color: #f59e0b; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "dotplot_plot", title = "Plot Options",
+                                          icon_name = "sliders-h", color = "#f59e0b",
                                           checkboxInput("DotRotateAxis",label = "Rotate x Axis Labels", FALSE),
                                           checkboxInput("DotFlipCoordinate",label = "Flip XY Coordinate", FALSE),
                                           conditionalPanel(
@@ -314,9 +348,9 @@ explorer_body_ui <- function(tab_list){
                                         solidHeader = TRUE, status = "primary", width = 3,
 
                                         # Data Selection
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("database"), "Data Selection", style = "color: #3b82f6; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "heatmap_data", title = "Data Selection",
+                                          icon_name = "database", color = "#3b82f6",
                                           textAreaInput("HeatmapGeneSymbol", "Gene Symbols:", value = "", height = '80px', resize = "vertical"),
                                           div(
                                             style = "background-color: #e9ecef; border: 1px solid #3b82f6; padding: 5px; border-radius: 4px; margin-top: 5px; margin-bottom: 10px;",
@@ -327,9 +361,9 @@ explorer_body_ui <- function(tab_list){
                                         ),
 
                                         # Cluster Settings
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("layer-group"), "Cluster Settings", style = "color: #10b981; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "heatmap_cluster", title = "Cluster Settings",
+                                          icon_name = "layer-group", color = "#10b981",
                                           withSpinner(uiOutput("HeatmapClusterResolution.UI"), proxy.height = "10px"),
                                           withSpinner(uiOutput("HeatmapIdentsSelected.UI"), proxy.height = "10px"),
                                           bsCollapse(id = "collapseHeatmap", open = "0",
@@ -339,9 +373,9 @@ explorer_body_ui <- function(tab_list){
                                         ),
 
                                         # Plot Options
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("sliders-h"), "Plot Options", style = "color: #f59e0b; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "heatmap_plot", title = "Plot Options",
+                                          icon_name = "sliders-h", color = "#f59e0b",
                                           sliderInput("HeatmapTextSize", label = "Cluster Text Size:", min = 1, max = 12, value = 6, step = 0.5),
                                           sliderInput("HeatmapTextHjust", label = "Cluster Text Hjust:", min = -10, max = 20, value = 0, step = 0.5),
                                           sliderInput("HeatmapTextVjust", label = "Cluster Text Vjust:", min = -5, max = 5, value = 0, step = 0.1),
@@ -369,9 +403,9 @@ explorer_body_ui <- function(tab_list){
                                         solidHeader = TRUE, status = "primary", width = 3,
 
                                         # Data Selection
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("database"), "Data Selection", style = "color: #3b82f6; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "avgheatmap_data", title = "Data Selection",
+                                          icon_name = "database", color = "#3b82f6",
                                           textAreaInput("AveragedHeatmapGeneSymbol", "Gene Symbols:", value = "", height = '80px', resize = "vertical"),
                                           div(
                                             style = "background-color: #e9ecef; border: 1px solid #3b82f6; padding: 5px; border-radius: 4px; margin-top: 5px; margin-bottom: 10px;",
@@ -381,9 +415,9 @@ explorer_body_ui <- function(tab_list){
                                         ),
 
                                         # Cluster Settings
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("layer-group"), "Cluster Settings", style = "color: #10b981; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "avgheatmap_cluster", title = "Cluster Settings",
+                                          icon_name = "layer-group", color = "#10b981",
                                           withSpinner(uiOutput("AveragedHeatmapClusterResolution.UI"), proxy.height = "10px"),
                                           withSpinner(uiOutput("AveragedHeatmapIdentsSelected.UI"), proxy.height = "10px"),
                                           bsCollapse(id = "collapseHeatmap", open = "0",
@@ -395,9 +429,9 @@ explorer_body_ui <- function(tab_list){
                                         ),
 
                                         # Plot Options
-                                        div(
-                                          style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                          h5(icon("sliders-h"), "Plot Options", style = "color: #f59e0b; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                        param_group_collapse(
+                                          id = "avgheatmap_plot", title = "Plot Options",
+                                          icon_name = "sliders-h", color = "#f59e0b",
                                           sliderInput("AveragedHeatmapClusterTextSize", label = "Cluster Text Size:", min = 1, max = 30, value = 12),
                                           sliderInput("AveragedHeatmapClusterTextRatateAngle", label = "Cluster Text Rotate Angle:", min = -90, max = 90, value = 45),
                                           sliderInput("AveragedHeatmapFeatureTextSize", label = "Feature Text Size:", min = 1, max = 20, value = 10),
@@ -416,9 +450,9 @@ explorer_body_ui <- function(tab_list){
                                       box(title = "Settings", solidHeader = TRUE, status = "primary", width = 3,
 
                                           # Data Selection
-                                          div(
-                                            style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                            h5(icon("database"), "Data Selection", style = "color: #3b82f6; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                          param_group_collapse(
+                                            id = "ridgeplot_data", title = "Data Selection",
+                                            icon_name = "database", color = "#3b82f6",
                                             textAreaInput("RidgeplotGeneSymbol", "Gene Symbols:", value = "", height = '80px', resize = "vertical"),
                                             div(
                                               style = "background-color: #e9ecef; border: 1px solid #3b82f6; padding: 5px; border-radius: 4px; margin-top: 5px; margin-bottom: 10px;",
@@ -429,9 +463,9 @@ explorer_body_ui <- function(tab_list){
                                           ),
 
                                           # Cluster Settings
-                                          div(
-                                            style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                            h5(icon("layer-group"), "Cluster Settings", style = "color: #10b981; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                          param_group_collapse(
+                                            id = "ridgeplot_cluster", title = "Cluster Settings",
+                                            icon_name = "layer-group", color = "#10b981",
                                             withSpinner(uiOutput("RidgeplotClusterResolution.UI"), proxy.height = "10px"),
                                             withSpinner(uiOutput("RidgeplotIdentsSelected.UI"), proxy.height = "10px"),
                                             bsCollapse(id = "collapseRidgeplot", open = "0",
@@ -441,9 +475,9 @@ explorer_body_ui <- function(tab_list){
                                           ),
 
                                           # Plot Options
-                                          div(
-                                            style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                            h5(icon("sliders-h"), "Plot Options", style = "color: #f59e0b; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                          param_group_collapse(
+                                            id = "ridgeplot_plot", title = "Plot Options",
+                                            icon_name = "sliders-h", color = "#f59e0b",
                                             conditionalPanel(
                                               condition = "output.Ridgeplot_stack_NotSelected",
                                               sliderInput("RidgeplotNumberOfColumns", label = "Number of columns:", min = 1, max = 10, value = 1),
@@ -477,18 +511,18 @@ explorer_body_ui <- function(tab_list){
                                       box(title = "Settings", solidHeader = TRUE, status = "primary", width = 3,
 
                                           # Data Selection (Fill, X, Facet)
-                                          div(
-                                            style = "background: #f8f9fa; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                            h5(icon("database"), "Data Selection", style = "color: #3b82f6; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                          param_group_collapse(
+                                            id = "cellratio_data", title = "Data Selection",
+                                            icon_name = "database", color = "#3b82f6",
                                             withSpinner(uiOutput("CellratioFillChoice.UI"), proxy.height = "10px"),
                                             withSpinner(uiOutput("CellratioXChoice.UI"), proxy.height = "10px"),
                                             withSpinner(uiOutput("CellratioFacetChoice.UI"), proxy.height = "10px")
                                           ),
 
                                           # Cluster Settings
-                                          div(
-                                            style = "background: #f8f9fa; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                            h5(icon("layer-group"), "Cluster Settings", style = "color: #10b981; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                          param_group_collapse(
+                                            id = "cellratio_cluster", title = "Cluster Settings",
+                                            icon_name = "layer-group", color = "#10b981",
                                             withSpinner(uiOutput("CellratioIdentsSelected.UI"), proxy.height = "10px"),
                                             bsCollapse(id = "collapseCellratioFillplot", open = "0",
                                                               bsCollapsePanel(title = "Change Order (Fill)",
@@ -505,9 +539,9 @@ explorer_body_ui <- function(tab_list){
                                           ),
 
                                           # Plot Options
-                                          div(
-                                            style = "background: #f8f9fa; border: 1px solid #f59e0b; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin-bottom: 15px;",
-                                            h5(icon("sliders-h"), "Plot Options", style = "color: #f59e0b; margin-bottom: 10px; font-size: 14px; font-weight: 600;"),
+                                          param_group_collapse(
+                                            id = "cellratio_plot", title = "Plot Options",
+                                            icon_name = "sliders-h", color = "#f59e0b",
                                             selectInput("Cellratiofillcolorplatte","select color plate:", choices = color_choice_vector, selected = "Default"),
                                             checkboxInput("CellratioRotateAxis",label = "Rotate X Axis", FALSE),
                                             sliderInput("CellratioColumnWidth", label = "Column width:", min = 0, max = 1, value = 0.7),
@@ -644,10 +678,10 @@ explorer_body_ui <- function(tab_list){
                                             div(
                                               style = "background: #eff6ff; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 25px; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 2px 6px rgba(59, 130, 246, 0.1);",
                                               h4(icon("filter"), "Step 1: Filter Cells (Optional)", style = "color: #3b82f6; margin-bottom: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px;"),
-                                              p("Modify parameters below if you want to filter cells before the comparison, otherwise ignore it.", style = "color: #6c757d; margin-bottom: 8px;"),
-                                              p("Only the selected cells will be kept for Step 2, and all cells will be kept by default.", style = "color: #6c757d; margin-bottom: 15px;"),
-                                              withSpinner(uiOutput("IntraClusterDEGsSubsetCells.UI"), proxy.height = "10px"),
-                                              withSpinner(uiOutput("IntraClusterDEGsSubsetCellsSelectedClusters.UI"), proxy.height = "10px")
+                                              p("Click the + button to add multiple filter conditions. Cells matching ALL conditions (intersection) will be kept.", style = "color: #6c757d; margin-bottom: 8px;"),
+                                              p("If no filters are modified, all cells will be kept by default.", style = "color: #6c757d; margin-bottom: 15px;"),
+                                              withSpinner(uiOutput("IntraClusterDEGsFilterRows.UI"), proxy.height = "10px"),
+                                              uiOutput("IntraClusterDEGsAddFilter.UI")
                                             ),
                                             # Step 2 - Set Comparison
                                             div(
@@ -714,37 +748,37 @@ explorer_body_ui <- function(tab_list){
                                              withSpinner(DT::dataTableOutput('dataset_degs'))
                                            )
                                          )
-                                       )
-                                       # # External Links - Custom styles (right column, accounting for 4/12)
-                                       # div(
-                                       #   class = "col-md-4",
-                                       #   conditionalPanel(
-                                       #     condition = "output.DEGs_row_selected",
-                                       #     div(
-                                       #       class = "box",
-                                       #       style = "background: white; border: 2px solid #10b981; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08);",
-                                       #       div(
-                                       #         class = "box-header",
-                                       #         style = "padding: 15px 20px; border-bottom: 2px solid #10b981;",
-                                       #         div(
-                                       #           style = "display: flex; align-items: center; gap: 10px;",
-                                       #           icon("external-link-alt", style = "color: #10b981; font-size: 18px;"),
-                                       #           h4(style = "margin: 0; color: #10b981; font-weight: 600;", "External Links")
-                                       #         )
-                                       #       ),
-                                       #       div(
-                                       #         class = "box-body",
-                                       #         style = "padding: 20px;",
-                                       #         div(
-                                       #           style = "margin: 10px 0;",
-                                       #           selectInput("selectspecies", "Choose Species:", choices = c("Human" = "human","Mouse" = "mouse","Fly" = "fly"), width = '100%'),
-                                       #           selectInput("selectsgenetype", "Choose Feature Types:", choices = c("Symbol" = "Symbol","Ensembl ID" = "Ensembl","Entrez ID" = "EntrezID"), width = '100%'),
-                                       #           withSpinner(uiOutput('ExternalLinks.UI'))
-                                       #         )
-                                       #       )
-                                       #     )
-                                       #   )
-                                       # )  # end of col-md-4 div
+                                       ),
+                                       # External Links - Custom styles (right column, accounting for 4/12)
+                                       div(
+                                         class = "col-md-4",
+                                         conditionalPanel(
+                                           condition = "output.DEGs_row_selected",
+                                           div(
+                                             class = "box",
+                                             style = "background: white; border: 2px solid #10b981; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08);",
+                                             div(
+                                               class = "box-header",
+                                               style = "padding: 15px 20px; border-bottom: 2px solid #10b981;",
+                                               div(
+                                                 style = "display: flex; align-items: center; gap: 10px;",
+                                                 icon("external-link-alt", style = "color: #10b981; font-size: 18px;"),
+                                                 h4(style = "margin: 0; color: #10b981; font-weight: 600;", "External Links")
+                                               )
+                                             ),
+                                             div(
+                                               class = "box-body",
+                                               style = "padding: 20px;",
+                                               div(
+                                                 style = "margin: 10px 0;",
+                                                 selectInput("selectspecies", "Choose Species:", choices = c("Human" = "human","Mouse" = "mouse","Fly" = "fly"), width = '100%'),
+                                                 selectInput("selectsgenetype", "Choose Feature Types:", choices = c("Symbol" = "Symbol","Ensembl ID" = "Ensembl","Entrez ID" = "EntrezID"), width = '100%'),
+                                                 withSpinner(uiOutput('ExternalLinks.UI'))
+                                               )
+                                             )
+                                           )
+                                         )
+                                       )  # end of col-md-4 div
                                    )  # end of fluidRow containing Analysis Results and External Links
                                  )  # end of margin-top div
                                )  # end of conditionalPanel
@@ -876,7 +910,7 @@ explorer_body_ui <- function(tab_list){
                                        tabPanel("Find Top Genes by Cell",
                                                 div(
                                                   style = "background: #eff6ff; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 20px; border-radius: 8px; margin-bottom: 25px;",
-                                                  sliderInput("TopGenesTopPercent", "UMI percentage cutoff(%):", min = 1, max = 10, value = 1, step = 1)
+                                                  sliderInput("TopGenesTopPercent", "UMI percentage cutoff(%):", min = 1, max = 50, value = 1, step = 1,  width = "100%")
                                                 ),
                                                 div(style = "text-align: center; margin-top: 25px;",
                                                   actionButton("TopGenesAnalysis",
@@ -888,7 +922,7 @@ explorer_body_ui <- function(tab_list){
                                        tabPanel("Find Top Genes by Accumulated UMI Counts",
                                                 div(
                                                   style = "background: #eff6ff; border: 1px solid #3b82f6; border-left: 4px solid #3b82f6; padding: 20px; border-radius: 8px; margin-bottom: 25px;",
-                                                  sliderInput("TopGenesTopN", "Top n:", min = 100, max = 1000, value = 100, step = 100)
+                                                  sliderInput("TopGenesTopN", "Top n:", min = 10, max = 1000, value = 100, step = 10,  width = "100%")
                                                 ),
                                                 div(style = "text-align: center; margin-top: 25px;",
                                                   actionButton("TopAccumulatedGenesAnalysis",
@@ -1286,6 +1320,115 @@ explorer_body_ui <- function(tab_list){
                                  )
                                )
   )
+  tab_list[["geneclusters"]] = tabItem(tabName = "geneclusters",
+    fluidRow(
+      box(title = "Gene Expression Histogram",
+        plotOutput("geneclusters_histogram"),
+        width = 9, status = "primary", collapsible = TRUE, solidHeader = TRUE),
+      box(title = "Settings", solidHeader = TRUE, status = "primary", width = 3,
+        textInput("geneclustersGeneSymbol", "Gene Symbol:", value = "", width = '100%'),
+        withSpinner(uiOutput("GeneclustersAssays.UI"), proxy.height = "10px"),
+        withSpinner(uiOutput("geneclustersAssaySlots.UI"), proxy.height = "10px"),
+        div(style = "margin-top: 15px;",
+          actionButton("geneclustersPlotHistogram", label = "Generate Histogram",
+            icon = icon("chart-bar"), class = "btn-primary",
+            style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;")
+        )
+      )
+    ),
+    conditionalPanel(
+      condition = "output.geneclusters_histogram_ready",
+      fluidRow(
+        div(class = "col-xs-12",
+          style = "margin-top: 15px;",
+          div(class = "box", style = "background: white; border: 2px solid #f59e0b; border-radius: 8px;",
+            div(class = "box-body", style = "padding: 20px;",
+              textInput("geneclustersCutoffs", "Cutoff values (comma-separated, e.g. 0.5, 1.0, 2.0):",
+                value = "", width = "100%"),
+              div(style = "margin-top: 10px;",
+                actionButton("geneclustersApplyCutoffs", label = "Apply Cutoffs",
+                  icon = icon("cut"), class = "btn-warning",
+                  style = "padding: 10px 30px; border-radius: 6px; font-weight: 600;")
+              )
+            )
+          )
+        )
+      )
+    ),
+    conditionalPanel(
+      condition = "output.geneclusters_table_ready",
+      fluidRow(style = "margin-top: 15px;",
+        div(class = "col-md-9",
+          div(class = "box", style = "background: white; border: 2px solid #3b82f6; border-radius: 8px;",
+            div(class = "box-header", style = "padding: 15px 20px; border-bottom: 2px solid #3b82f6;",
+              h4(icon("table"), "Classification Table", style = "color: #3b82f6; font-weight: 600; margin: 0;")
+            ),
+            div(class = "box-body", style = "padding: 20px;",
+              withSpinner(DT::dataTableOutput('geneclusters_table'))
+            )
+          )
+        ),
+        div(class = "col-md-3",
+          div(style = "background: #f0fdf4; border: 1px solid #10b981; border-left: 4px solid #10b981; padding: 20px; border-radius: 8px;",
+            h4(icon("check"), "Actions", style = "color: #10b981; margin-bottom: 15px; font-weight: 600;"),
+            div(style = "margin-bottom: 15px;",
+              actionButton("geneclustersCheck", label = "Check", icon = icon("check"),
+                class = "btn-primary", style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;")
+            ),
+            actionButton("geneclustersSubmit", label = "Submit", icon = icon("upload"),
+              class = "btn-success", style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;"),
+            div(style = "margin-top: 15px;",
+              downloadButton("geneclustersDownload", "Download Mapping", icon = icon("file-arrow-down"),
+                class = "btn-warning", style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;")
+            ),
+            div(style = "background: #fef3c7; border-left: 3px solid #f59e0b; padding: 10px; border-radius: 4px; margin-top: 15px;",
+              p("Tips: Click 'Check' to preview, then 'Submit' to add annotation.", style = "font-size: 12px; margin: 0; color: #92400e;")
+            )
+          )
+        )
+      )
+    )
+  )
+  tab_list[["addmodulescore"]] = tabItem(tabName = "addmodulescore",
+    fluidRow(
+      box(title = "Add Module Score", solidHeader = TRUE, status = "primary", width = 12,
+        textAreaInput("ModuleScoreFeatures", "Gene Symbols:",
+          value = "", height = '100px', resize = "vertical",
+          placeholder = "Paste gene symbols, one per line or comma-separated"),
+        withSpinner(uiOutput("ModuleScoreAssays.UI"), proxy.height = "10px"),
+        div(style = "margin-top: 15px;",
+          actionButton("ModuleScoreCheckGenes", label = "Check Genes",
+            icon = icon("check"), class = "btn-primary",
+            style = "padding: 10px 30px; border-radius: 6px; font-weight: 600;")
+        ),
+        hr(),
+        uiOutput("ModuleScoreName.UI"),
+        uiOutput("ModuleScoreSubmit.UI")
+      )
+    ),
+    uiOutput("ModuleScoreResult.UI")
+  )
+  tab_list[["combinedclusters"]] = tabItem(tabName = "combinedclusters",
+    fluidRow(
+      box(title = "Combination Table",
+        DT::dataTableOutput('combinedclusters_table'),
+        width = 9, status = "primary", collapsible = TRUE, solidHeader = TRUE),
+      box(title = "Settings", solidHeader = TRUE, status = "primary", width = 3,
+        withSpinner(uiOutput("CombinedClusterResolution.UI"), proxy.height = "10px"),
+        withSpinner(uiOutput("CombinedClusterResolutionSecond.UI"), proxy.height = "10px"),
+        selectInput("CombinedClusterConnector", "Connector:",
+          choices = c("-" = "-", "+" = "+", "_" = "_"), selected = "_"),
+        div(style = "margin-top: 15px;",
+          actionButton("combinedclustersGenerate", label = "Generate",
+            icon = icon("table"), class = "btn-primary",
+            style = "width: 100%; padding: 10px; border-radius: 6px; font-weight: 600;")
+        ),
+        hr(),
+        uiOutput("combinedclustersName.UI"),
+        uiOutput("combinedclustersSubmit.UI")
+      )
+    )
+  )
   tab_list[["featuresdf"]] = tabItem(tabName = "featuresdf",
                                fluidRow(id = "featuresdf-main-row",
                                  div(
@@ -1438,6 +1581,12 @@ ui <-  function(){
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
 
+        /* Sidebar menu: compact spacing */
+        .sidebar-menu .treeview-menu li a {
+          white-space: nowrap;
+          padding: 4px 5px 4px 12px !important;
+        }
+
         /* Optimize box style - keep default background */
         .box {
           border-radius: 6px;
@@ -1488,6 +1637,21 @@ ui <-  function(){
           border-radius: 6px;
           padding: 8px 16px;
           font-weight: 500;
+        }
+
+        /* Collapsible parameter group styles */
+        summary::-webkit-details-marker,
+        summary::marker {
+          display: none;
+        }
+
+        .param-group-chevron {
+          transition: transform 0.3s ease;
+          display: inline-block;
+        }
+
+        details:not([open]) .param-group-chevron {
+          transform: rotate(-90deg);
         }
 
         /* Responsive optimization */
