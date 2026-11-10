@@ -8,7 +8,11 @@ launchSeuratExplorer(
   verbose = FALSE,
   ReductionKeyWords = c("umap", "tsne", "pca"),
   SplitOptionMaxLevel = 12,
-  MaxInputFileSize = 20 * 1024^3
+  MaxInputFileSize = 20 * 1024^3,
+  EnableObjectExport = TRUE,
+  DemoDataURL = NULL,
+  DemoDataCacheDir = NULL,
+  DemoDataMD5 = "e144cabc42684f037e60a603f74ed4f1"
 )
 }
 \arguments{
@@ -19,6 +23,20 @@ launchSeuratExplorer(
 \item{SplitOptionMaxLevel}{max level cutoff for prepare Split options}
 
 \item{MaxInputFileSize}{set the limited upload file size}
+
+\item{EnableObjectExport}{whether to show the "Export Data" page, which lets
+users download the full (possibly subset) Seurat object. Defaults to
+\code{TRUE} for the local app; set it to \code{FALSE} to hide the page.}
+
+\item{DemoDataURL}{one or more URLs of the demo Seurat object downloaded by
+the "Download and Run a demo data" button. Multiple URLs are tried in
+order until one succeeds (primary, then backup)}
+
+\item{DemoDataCacheDir}{directory used to cache the downloaded demo data;
+if NULL, a per-user cache directory is used}
+
+\item{DemoDataMD5}{expected md5 checksum of the downloaded demo data;
+set to NULL to skip the integrity check}
 }
 \value{
 In-browser Shiny Application launch

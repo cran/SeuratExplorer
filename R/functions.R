@@ -1,7 +1,7 @@
 prepare_seurat_object <- function(obj, verbose = FALSE){
   requireNamespace("Seurat")
   # trans the none-factor columns in meta.data to factor
-  # if the unique counts less than 1/20 of total cells, and not more than 50, in chr or num type columns，will be forced to factor type.
+  # if the unique counts less than 1/20 of total cells, and not more than 50, in chr or num type columns,will be forced to factor type.
   # possible problem: unique_max_percent = 0.05 may not suitable for a data has 100 cells but more than 5 clusters.
   obj@meta.data <- modify_columns_types(df = obj@meta.data, types_to_check = c("numeric", "character"), unique_max_counts = 200, unique_max_percent = 0.1, verbose = verbose)
   # remove zero count levels
@@ -89,10 +89,15 @@ modify_columns_types <- function(df, types_to_check = c("numeric", "character"),
   return(df)
 }
 
-# get reduction options by keywords: umap and tsne
+# get reduction options by keywords; results are ordered by keyword priority
 prepare_reduction_options <- function(obj, keywords = c("umap","tsne"), verbose = FALSE){
   requireNamespace("Seurat")
-  reduction.choice <- grep(paste0(paste0("(", keywords,")"),collapse = "|"), Seurat::Reductions(obj), value = TRUE, ignore.case = TRUE)
+  reductions <- Seurat::Reductions(obj)
+  reduction.choice <- character(0)
+  for (keyword in keywords) {
+    matched <- reductions[grepl(keyword, reductions, ignore.case = TRUE)]
+    reduction.choice <- c(reduction.choice, setdiff(matched, reduction.choice))
+  }
   names(reduction.choice) <- toupper(reduction.choice)
   if(verbose){message("SeuratExplorer: prepare_reduction_options runs successfully!")}
   return(reduction.choice)
@@ -193,7 +198,8 @@ prepare_qc_options <- function(df, types = c("double","integer","numeric"), verb
 
 # Check the input gene, return the revised gene, which can be used for FeaturePlot, Vlnplot ect.
 CheckGene <- function(InputGene, GeneLibrary, verbose = FALSE){
-  InputGenes <- trimws(unlist(strsplit(InputGene,split = "\n")))
+  # split by any whitespace (space, tab, newline), comma or semicolon
+  InputGenes <- trimws(unlist(strsplit(InputGene, split = "[[:space:],;]+")))
   InputGenes <- InputGenes[InputGenes != ""]
   revised.genes <- sapply(InputGenes, FUN = function(x)ReviseGene(x, GeneLibrary = GeneLibrary))
   revised.genes <- unique(unname(revised.genes[!is.na(revised.genes)]))
@@ -336,6 +342,15 @@ getColors <- function(color.platte = NULL,
   }
 }
 
+# Relative luminance (WCAG) of hex colours. Used to pick black or white text
+# for percentage labels drawn on top of a coloured segment.
+color_luminance <- function(hex) {
+  if (length(hex) == 0) return(numeric(0))
+  rgb <- grDevices::col2rgb(hex) / 255
+  lin <- ifelse(rgb <= 0.03928, rgb / 12.92, ((rgb + 0.055) / 1.055)^2.4)
+  colSums(lin * c(0.2126, 0.7152, 0.0722))
+}
+
 globalVariables(c("num"))
 
 #' @title plot cell percentage barplot
@@ -354,6 +369,20 @@ globalVariables(c("num"))
 #' @param flow.alpha transparency for flow
 #' @param flow.curve curve for flow
 #' @param color.choice color choice for fill
+#' @param fill.values optional named vector of fill colours; takes precedence
+#'   over \code{color.choice}
+#' @param show_percent draw percentage labels inside the bars
+#' @param percent_cutoff segments smaller than this percentage (0-100) are not
+#'   labelled
+#' @param percent_size text size of the percentage labels
+#' @param percent_digits number of decimals in the percentage labels
+#' @param percent_text_color label colour: "auto" picks black or white from the
+#'   fill colour, "black"/"white" forces that colour
+#' @param list_rare list segments below \code{percent_cutoff} in the plot
+#'   caption instead of on the bars
+#' @param show_sample_size append the number of cells to the x-axis tick labels,
+#'   e.g. "WT (n = 1,234)"; ignored when \code{facet.name} is set because the
+#'   panels have different cell counts
 #' @import dplyr
 #' @importFrom dplyr %>%
 #' @importFrom rlang .data
@@ -373,7 +402,15 @@ cellRatioPlot <- function(object = NULL,
                           col.width = 0.7,
                           flow.alpha = 0.25,
                           flow.curve = 0,
-                          color.choice = NULL) {
+                          color.choice = NULL,
+                          fill.values = NULL,
+                          show_percent = FALSE,
+                          percent_cutoff = 2.5,
+                          percent_size = 4,
+                          percent_digits = 1,
+                          percent_text_color = "auto",
+                          list_rare = FALSE,
+                          show_sample_size = FALSE) {
   requireNamespace("dplyr")
   # Input validation
   if (is.null(object)) stop("object cannot be NULL")
@@ -428,7 +465,12 @@ cellRatioPlot <- function(object = NULL,
 
   # color
   # fill.col <- getColors(color.platte = color_list, choice = color.choice, n = length(unique(meta[, celltype.name])))
-  fill.col <- getColors(color.platte = color_list, choice = color.choice, n = length(idents))
+  # `fill.values` (named by cell type) takes precedence over the palette choice.
+  fill.col <- if (!is.null(fill.values)) {
+    fill.values
+  } else {
+    getColors(color.platte = color_list, choice = color.choice, n = length(idents))
+  }
 
 
   # plot
@@ -453,6 +495,99 @@ cellRatioPlot <- function(object = NULL,
     p <- p +
       ggplot2::facet_grid(stats::as.formula(paste0(facet.name, "~ ."))) +
       ggplot2::theme(panel.spacing = grid::unit(0.8, "cm", data = NULL))
+  }
+
+  # Cell counts on the x-axis tick labels. Facets are skipped because the x
+  # labels are shared by panels whose cell counts differ.
+  if (isTRUE(show_sample_size) && is.null(facet.name) &&
+      (is.factor(meta[[sample.name]]) || is.character(meta[[sample.name]]))) {
+    n_by_sample <- table(meta[[sample.name]])
+    n_fmt <- format(as.integer(n_by_sample), big.mark = ",", scientific = FALSE,
+                    trim = TRUE)
+    names(n_fmt) <- names(n_by_sample)
+    p <- p + ggplot2::scale_x_discrete(labels = function(x) {
+      n <- n_fmt[as.character(x)]
+      ifelse(is.na(n), as.character(x), paste0(as.character(x), " (n = ", n, ")"))
+    })
+  }
+
+  # Percentage labels inside the bars. Labels are drawn from the full data with
+  # position_stack(), so each label sits at the centre of its segment exactly
+  # like the bar; segments below `percent_cutoff` get an empty label instead of
+  # being dropped (dropping them would shift the remaining labels).
+  if (isTRUE(show_percent)) {
+    pd <- suppressWarnings(as.integer(percent_digits))
+    if (length(pd) != 1L || is.na(pd) || pd < 0) pd <- 1L
+    if (length(percent_cutoff) != 1L || is.na(percent_cutoff)) percent_cutoff <- 2.5
+    if (length(percent_size) != 1L || is.na(percent_size)) percent_size <- 4
+
+    lab <- ratio.info
+    lab$label_text <- ifelse(
+      lab$rel_num * 100 >= percent_cutoff,
+      sprintf(paste0("%.", pd, "f%%"), lab$rel_num * 100),
+      ""
+    )
+
+    # Resolve each cell type's fill colour to choose black or white text, or
+    # use the colour forced by the user.
+    tcol <- percent_text_color[1]
+    if (is.na(tcol) || !tcol %in% c("auto", "black", "white")) tcol <- "auto"
+    if (identical(tcol, "auto")) {
+      fill_lookup <- fill.col
+      if (is.null(names(fill_lookup))) {
+        lv_fill <- levels(meta[[celltype.name]])
+        if (is.null(lv_fill)) lv_fill <- unique(as.character(meta[[celltype.name]]))
+        if (length(lv_fill) == length(fill_lookup)) names(fill_lookup) <- lv_fill
+      }
+      ct_col <- fill_lookup[as.character(lab[[celltype.name]])]
+      ct_col[is.na(ct_col)] <- "#000000"
+      lab$label_col <- ifelse(color_luminance(ct_col) < 0.35, "white", "black")
+    } else {
+      lab$label_col <- tcol
+    }
+
+    p <- p + ggplot2::geom_text(
+      data = lab,
+      mapping = ggplot2::aes(x = .data[[sample.name]], y = .data[["rel_num"]],
+                             label = .data[["label_text"]],
+                             colour = .data[["label_col"]],
+                             group = .data[[celltype.name]]),
+      position = ggplot2::position_stack(vjust = 0.5),
+      size = percent_size, fontface = "bold", show.legend = FALSE,
+      inherit.aes = FALSE
+    ) +
+      ggplot2::scale_colour_identity()
+
+    # List the segments that are too small to be labelled on the bars.
+    if (isTRUE(list_rare)) {
+      rare <- lab[lab$rel_num * 100 < percent_cutoff, , drop = FALSE]
+      if (nrow(rare) > 0) {
+        rare$one_label <- sprintf("%s %.2f%%", as.character(rare[[celltype.name]]),
+                                  rare$rel_num * 100)
+        grp_vars <- c(sample.name, if (!is.null(facet.name)) facet.name)
+        grp_key <- do.call(paste, c(lapply(grp_vars, function(v) as.character(rare[[v]])),
+                                    sep = " / "))
+        rare_lines <- vapply(unique(grp_key), function(k) {
+          d <- rare[grp_key == k, , drop = FALSE]
+          head_label <- vapply(grp_vars, function(v) as.character(d[[v]][1]),
+                               character(1))
+          paste0(paste(head_label, collapse = " / "),
+                 " - ", paste(d$one_label, collapse = "; "))
+        }, character(1))
+        caption_text <- paste0(
+          sprintf("Percentages are within each group. Segments below %s%% are listed here instead of on the bars:\n",
+                  format(percent_cutoff)),
+          paste(rare_lines, collapse = "\n")
+        )
+        p <- p + ggplot2::labs(caption = caption_text) +
+          ggplot2::theme(
+            plot.caption = ggplot2::element_text(
+              hjust = 0, size = ggplot2::rel(0.8), colour = "grey30",
+              lineheight = 1.15, margin = ggplot2::margin(t = 6)
+            )
+          )
+      }
+    }
   }
   return(p)
 }
@@ -507,22 +642,24 @@ top_genes <- function(SeuratObj, percent.cut = 0.01, group.by, assay = 'RNA') {
 }
 
 top_genes_core <- function(expr_mat, cutoff = 0.01, celltype){
-  # to block R RMD check note: Undefined global functions or variables:
-  Expr <- NULL
-  Gene <- NULL
+  top_genes_aggregate(
+    gene_list = top_genes_cell_block(expr_mat, cutoff, seq_len(ncol(expr_mat))),
+    expr_mat = expr_mat,
+    celltype = celltype
+  )
+}
 
-  # Optimized version using matrix operations instead of loops
-  # Calculate total UMI per cell
-  cell_totals <- colSums(expr_mat)
-
-  # Find genes above cutoff for each cell using vectorized operations
-  gene_list <- list()
-  for (i in 1:ncol(expr_mat)) {
-    if (cell_totals[i] > 0) {
-      rates <- expr_mat[, i] / cell_totals[i]
+# Per-cell extraction used by top_genes_core(). `cols` selects a block of cells
+# so the loop can be spread over several event-loop ticks (cancellable runs).
+top_genes_cell_block <- function(expr_mat, cutoff, cols){
+  cell_totals <- colSums(expr_mat[, cols, drop = FALSE])
+  gene_list <- vector("list", length(cols))
+  for (k in seq_along(cols)) {
+    if (cell_totals[k] > 0) {
+      rates <- expr_mat[, cols[k]] / cell_totals[k]
       top_genes_idx <- which(rates > cutoff)
       if (length(top_genes_idx) > 0) {
-        gene_list[[i]] <- data.frame(
+        gene_list[[k]] <- data.frame(
           'Gene' = rownames(expr_mat)[top_genes_idx],
           'Expr' = rates[top_genes_idx],
           stringsAsFactors = FALSE
@@ -530,12 +667,24 @@ top_genes_core <- function(expr_mat, cutoff = 0.01, celltype){
       }
     }
   }
+  gene_list[!vapply(gene_list, is.null, logical(1))]
+}
+
+# Aggregate the per-cell gene list of one group into the summary table.
+top_genes_aggregate <- function(gene_list, expr_mat, celltype){
+  # to block R RMD check note: Undefined global functions or variables:
+  Expr <- NULL
+  Gene <- NULL
+
+  gene_list <- gene_list[!vapply(gene_list, is.null, logical(1))]
 
   if (length(gene_list) == 0) {
-    # Return empty data frame with correct structure
+    # Return empty data frame with correct structure. All columns must be
+    # zero-length: mixing scalars with character(0) throws
+    # "arguments imply differing number of rows".
     return(data.frame(
-      celltype = celltype,
-      total.cells = ncol(expr_mat),
+      celltype = character(0),
+      total.cells = integer(0),
       Gene = character(0),
       total.pos.cells = integer(0),
       total.UMI.pct = numeric(0),
@@ -695,6 +844,52 @@ calculate_correlation <- function(SeuratObj, features, method, assay = 'RNA'){
   cor.res$correlation <- round(cor.res$correlation, digits = 4)
   rownames(cor.res) <- NULL
   return(cor.res)
+}
+
+
+# --- Feature correlation: blocked (cancelable) top-correlation search --------
+# The full gene x gene correlation is O(genes^2 x cells) and can run for a very
+# long time. The upper triangle is computed in blocks of genes so the Shiny
+# event loop can run between blocks, which makes the run cancelable.
+# Each block keeps only its own top `keep` pairs; the global top-N is always a
+# subset of that union, so the final table matches the unblocked computation.
+calculate_top_correlations_block <- function(expr_t, from, to, method = "pearson",
+                                             keep = 1000L) {
+  n <- ncol(expr_t)
+  if (from > n) return(NULL)
+  to <- min(to, n)
+  x <- expr_t[, from:to, drop = FALSE]
+  y <- expr_t[, from:n, drop = FALSE]
+  cm <- stats::cor(x = x, y = y, method = method)
+
+  # keep only pairs (i < j): zero the diagonal block's lower triangle + diagonal
+  k <- to - from + 1L
+  block <- cm[, seq_len(k), drop = FALSE]
+  block[lower.tri(block, diag = TRUE)] <- 0
+  cm[, seq_len(k)] <- block
+
+  res <- reshape2::melt(cm)
+  colnames(res) <- c("GeneA", "GeneB", "correlation")
+  res <- res[res$correlation != 0, , drop = FALSE]
+  if (nrow(res) == 0) return(NULL)
+  res <- res[order(abs(res$correlation), decreasing = TRUE), , drop = FALSE]
+  if (nrow(res) > keep) res <- res[seq_len(keep), , drop = FALSE]
+  rownames(res) <- NULL
+  res
+}
+
+# Assemble per-block results into the final table (same as
+# calculate_top_correlations()).
+finalize_top_correlations <- function(parts, top = 1000) {
+  parts <- parts[!vapply(parts, is.null, logical(1))]
+  if (length(parts) == 0) return(data.frame())
+  res <- do.call(rbind, parts)
+  res <- res[res$correlation != 0, , drop = FALSE]
+  res <- res[order(abs(res$correlation), decreasing = TRUE), , drop = FALSE]
+  res$correlation <- round(res$correlation, digits = 4)
+  if (nrow(res) > top) res <- res[seq_len(top), , drop = FALSE]
+  rownames(res) <- NULL
+  res
 }
 
 
@@ -898,21 +1093,311 @@ updateSeurat <- function(obj, verbose = FALSE){
   return(obj)
 }
 
+load_seurat_object <- function(path, data, verbose = FALSE){
+  obj <- tryCatch({
+    updateSeurat(readSeurat(path = path, verbose = verbose),
+                 verbose = verbose)
+  }, error = function(e) {
+    return(FALSE)
+  })
+  if (is.logical(obj) && obj == FALSE) {
+    showModal(modalDialog(
+      title = tagList(icon("exclamation-triangle"), "Error"),
+      tags$div(
+        tags$p("Read file failed!"),
+        tags$small(style = "color: #6c757d;", "Please check the file format and try again.")
+      ),
+      easyClose = TRUE,
+      footer = modalButton("OK"),
+      size = "m"
+    ))
+    return(FALSE)
+  }
+  if (!all(validObject(obj), inherits(obj, "Seurat"))) {
+    showModal(modalDialog(
+      title = tagList(icon("exclamation-triangle"), "Error"),
+      tags$div(
+        tags$p("Invalid object type."),
+        tags$small(style = "color: #6c757d;", paste0("The submitted data is a ", class(obj)[[1]], " object, not a Seurat object!"))
+      ),
+      easyClose = TRUE,
+      footer = modalButton("OK"),
+      size = "m"
+    ))
+    return(FALSE)
+  }
+  data$Path <- path
+
+  data$obj <- prepare_seurat_object(obj = obj,
+                                    verbose = verbose)
+
+  # Restore custom colours from an object that was exported by this app.
+  data$cluster_colors <- tryCatch(data$obj@misc$SeuratExplorer$cluster_colors,
+                                  error = function(e) NULL)
+  if (is.null(data$cluster_colors) || !is.list(data$cluster_colors)) {
+    data$cluster_colors <- list()
+  }
+
+  data$reduction_options <- prepare_reduction_options(obj = data$obj,
+                                                      keywords = getOption("SeuratExplorerReductionKeyWords"),
+                                                      verbose = verbose)
+
+  data$reduction_default <- if (length(data$reduction_options) > 0) unname(data$reduction_options[1]) else NULL
+
+  data$assays_slots_options <- prepare_assays_slots(obj = data$obj,
+                                                    data_slot = data$assay_slots,
+                                                    verbose = verbose)
+
+  data$assays_options <- prepare_assays_options(Alist = data$assays_slots_options,
+                                                verbose = verbose)
+
+  data$assay_default <- ifelse(is.null(DefaultAssay(data$obj)), data$assays_options[1],
+                               DefaultAssay(data$obj))
+
+  data$cluster_options <- prepare_cluster_options(df = data$obj@meta.data,
+                                                  verbose = verbose)
+
+  data$gene_annotations_list <- prepare_gene_annotations(obj = data$obj,
+                                                         verbose = verbose)
+
+  data$split_options <- prepare_split_options(df = data$obj@meta.data,
+                                              max.level = data$split_maxlevel,
+                                              verbose = verbose)
+
+  data$extra_qc_options <- prepare_qc_options(df = data$obj@meta.data,
+                                              types = c("double","integer","numeric"),
+                                              verbose = verbose)
+
+  check_data(data = data)
+  return(TRUE)
+}
+
+is_writable_dir <- function(path){
+  tryCatch({
+    created <- dir.create(path, recursive = TRUE, showWarnings = FALSE)
+    if (!created && !dir.exists(path)) {
+      return(FALSE)
+    }
+    probe <- file.path(path, paste0(".SeuratExplorer_write_test_", Sys.getpid()))
+    file.create(probe, showWarnings = FALSE)
+    was_created <- file.exists(probe)
+    if (was_created) {
+      unlink(probe, force = TRUE)
+    }
+    isTRUE(was_created)
+  }, error = function(e) FALSE)
+}
+
+demo_cache_dir <- function(){
+  candidates <- c(
+    getOption("SeuratExplorerDemoCacheDir"),
+    Sys.getenv("SEURATEXPLORER_CACHE_DIR", unset = NA_character_),
+    tryCatch(tools::R_user_dir("SeuratExplorer", which = "cache"), error = function(e) NA_character_)
+  )
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  for (candidate in candidates) {
+    if (is_writable_dir(candidate)) {
+      return(candidate)
+    }
+  }
+  fallback <- file.path(tempdir(), "SeuratExplorer-cache")
+  dir.create(fallback, recursive = TRUE, showWarnings = FALSE)
+  fallback
+}
+
+update_demo_progress <- function(session, offset, total){
+  tryCatch(
+    shiny::setProgress(
+      value = offset / total,
+      detail = paste0(round(offset / 1048576, 1), " / ", round(total / 1048576, 1), " MB"),
+      session = session
+    ),
+    error = function(e) NULL
+  )
+}
+
+demo_fetch_range <- function(url, start, end, connecttimeout = 60){
+  handle <- curl::new_handle()
+  curl::handle_setopt(
+    handle,
+    followlocation = TRUE,
+    failonerror = TRUE,
+    connecttimeout = connecttimeout,
+    low_speed_limit = 1,
+    low_speed_time = 120,
+    accept_encoding = "",
+    range = paste0(start, "-", end)
+  )
+  response <- curl::curl_fetch_memory(url = url, handle = handle)
+  if (response$status_code >= 400) {
+    stop("Failed to download the demo data (HTTP ", response$status_code, ").")
+  }
+  total <- NULL
+  header_lines <- strsplit(rawToChar(response$headers), "\r\n")[[1]]
+  content_range <- grep("^content-range:", header_lines, ignore.case = TRUE, value = TRUE)
+  if (length(content_range) > 0) {
+    matched <- regmatches(content_range[1], regexec("/([0-9]+)[[:space:]]*$", trimws(content_range[1])))[[1]]
+    if (length(matched) >= 2) {
+      total <- suppressWarnings(as.numeric(matched[2]))
+    }
+  } else if (start == 0) {
+    total <- length(response$content)
+  }
+  list(content = response$content, total = total)
+}
+
+download_demo_data <- function(url, dest, session = shiny::getDefaultReactiveDomain(), expected_md5 = NULL, chunk_size = 4 * 1024^2){
+  urls <- as.character(url)
+  urls <- urls[!is.na(urls) & nzchar(urls)]
+  if (length(urls) == 0) {
+    stop("No demo data URL is configured.")
+  }
+  last_error <- NULL
+  for (i in seq_along(urls)) {
+    ok <- tryCatch({
+      download_demo_data_from_url(urls[i], dest = dest, session = session,
+                                  expected_md5 = expected_md5, chunk_size = chunk_size)
+      TRUE
+    }, error = function(e) {
+      last_error <<- e
+      FALSE
+    })
+    if (isTRUE(ok)) {
+      return(invisible(dest))
+    }
+    if (i < length(urls)) {
+      tryCatch(
+        shiny::setProgress(session = session, value = 0,
+                           detail = "Primary source failed, trying a backup source ..."),
+        error = function(e) NULL
+      )
+    }
+  }
+  stop(conditionMessage(last_error))
+}
+
+download_demo_data_from_url <- function(url, dest, session = shiny::getDefaultReactiveDomain(), expected_md5 = NULL, chunk_size = 4 * 1024^2){
+  if (!dir.create(dirname(dest), recursive = TRUE, showWarnings = FALSE) && !dir.exists(dirname(dest))) {
+    stop("Cannot create the demo data cache directory.")
+  }
+  tmp <- paste0(dest, ".part")
+  if (file.exists(tmp)) unlink(tmp, force = TRUE)
+
+  first <- demo_fetch_range(url, start = 0, end = chunk_size - 1)
+  if (length(first$content) == 0) {
+    stop("The downloaded demo data file is empty.")
+  }
+  total <- first$total
+
+  con <- file(tmp, "wb")
+  con_open <- TRUE
+  on.exit({
+    if (con_open) try(close(con), silent = TRUE)
+    if (file.exists(tmp)) unlink(tmp, force = TRUE)
+  }, add = TRUE)
+
+  writeBin(first$content, con)
+  offset <- length(first$content)
+
+  if (!is.null(total) && is.finite(total) && total > offset) {
+    update_demo_progress(session, offset, total)
+    while (offset < total) {
+      end <- min(offset + chunk_size - 1, total - 1)
+      chunk <- demo_fetch_range(url, start = offset, end = end)
+      if (length(chunk$content) == 0) {
+        stop("The demo data download stalled before completion.")
+      }
+      writeBin(chunk$content, con)
+      offset <- offset + length(chunk$content)
+      update_demo_progress(session, offset, total)
+      Sys.sleep(0.02)
+    }
+  } else {
+    update_demo_progress(session, offset, max(offset, 1))
+    Sys.sleep(0.02)
+  }
+
+  close(con)
+  con_open <- FALSE
+  if (!file.exists(tmp) || file.size(tmp) == 0) {
+    stop("The downloaded demo data file is empty.")
+  }
+  if (!is.null(total) && is.finite(total) && file.size(tmp) != total) {
+    stop("The downloaded demo data is incomplete.")
+  }
+  if (!is.null(expected_md5) && nzchar(expected_md5)) {
+    actual_md5 <- unname(tools::md5sum(tmp))
+    if (!identical(tolower(actual_md5), tolower(expected_md5))) {
+      stop("The downloaded demo data failed the integrity check (md5 mismatch).")
+    }
+  }
+  file.rename(tmp, dest)
+  invisible(dest)
+}
+
+resolve_plot_inputs <- function(data, cluster = NULL, assay = NULL, idents = NULL, order = NULL){
+  cluster_column <- cluster
+  if (is.null(cluster_column) || !(cluster_column %in% colnames(data$obj@meta.data))) {
+    cluster_column <- data$cluster_default
+  }
+  if (is.null(cluster_column) || !(cluster_column %in% colnames(data$obj@meta.data))) {
+    cluster_column <- data$cluster_options[1]
+  }
+  level_values <- levels(data$obj@meta.data[, cluster_column])
+  if (is.null(level_values)) {
+    level_values <- unique(as.character(data$obj@meta.data[, cluster_column]))
+  }
+  idents_used <- if (is.null(idents)) level_values else intersect(as.character(idents), level_values)
+  if (length(idents_used) == 0) {
+    idents_used <- level_values
+  }
+  order_used <- if (is.null(order)) idents_used else intersect(as.character(order), idents_used)
+  if (length(order_used) == 0) {
+    order_used <- idents_used
+  }
+  assay_name <- assay
+  if (is.null(assay_name) || !(assay_name %in% Seurat::Assays(data$obj))) {
+    assay_name <- data$assay_default
+  }
+  if (is.null(assay_name) || !(assay_name %in% Seurat::Assays(data$obj))) {
+    assay_name <- data$assays_options[1]
+  }
+  list(cluster = cluster_column, levels = level_values, idents = idents_used,
+       order = order_used, assay = assay_name)
+}
+
 check_data <- function(data, key_paramaters = c('reduction_options', 'cluster_options', 'assays_options', 'assays_slots_options', 'split_options')){
   zero_length_parameters <- names(data)[unname(unlist(lapply(data, function(x){length(x) == 0})))]
   zero_length_parameters <- zero_length_parameters[zero_length_parameters %in% key_paramaters]
   if (length(zero_length_parameters) != 0) {
-    showModal(modalDialog(
-      title = tagList(icon("triangle-exclamation"), "Warnning"),
-      tags$div(
-        tags$p(paste0("Key parameters found with zero length: ", paste0(zero_length_parameters, collapse = ', '), '.')),
-        tags$small(style = "color: #6c757d;", "Related functions will not work properly!")
-      ),
-      easyClose = TRUE,
-      footer = modalButton("Continue"),
-      size = "m"
-     )
-    )
+    # give a specific, actionable message when the object has no qualifying dimensionality reduction
+    if ('reduction_options' %in% zero_length_parameters) {
+      reduction_keywords <- getOption("SeuratExplorerReductionKeyWords", default = c("umap", "tsne"))
+      showModal(modalDialog(
+        title = tagList(icon("exclamation-triangle"), "No Dimensionality Reduction Found"),
+        tags$div(
+          tags$p("This Seurat object has no dimensionality reduction matching the keywords:"),
+          tags$pre(paste(reduction_keywords, collapse = ", ")),
+          tags$p("Dim Reduction Plot, Feature Plot and Rename Clusters will not work. Please provide a Seurat object with reductions (e.g. 'umap', 'tsne', 'pca'), or adjust the 'ReductionKeyWords' argument of launchSeuratExplorer() to match your data.")
+        ),
+        easyClose = TRUE,
+        footer = modalButton("OK"),
+        size = "m"
+      ))
+      zero_length_parameters <- setdiff(zero_length_parameters, 'reduction_options')
+    }
+    if (length(zero_length_parameters) != 0) {
+      showModal(modalDialog(
+        title = tagList(icon("exclamation-triangle"), "Warning"),
+        tags$div(
+          tags$p(paste0("Key parameters found with zero length: ", paste0(zero_length_parameters, collapse = ', '), '.')),
+          tags$small(style = "color: #6c757d;", "Related functions will not work properly!")
+        ),
+        easyClose = TRUE,
+        footer = modalButton("OK"),
+        size = "m"
+      ))
+    }
   }
 }
 
@@ -944,11 +1429,425 @@ empty_plot <- ggplot2::ggplot() +
                  axis.ticks = ggplot2::element_blank())
 
 
+# for dimension-reduction related plots when the Seurat object has no reductions matching the keywords
+empty_plot_no_reduction <- ggplot2::ggplot() +
+  ggplot2::annotate('text', x = 0, y = 0,
+                    label = 'No dimensionality reduction found!\nThis Seurat object has no reduction matching the configured keywords.\nPlease use an object with "umap" / "tsne" / "pca" reductions,\nor adjust the ReductionKeyWords argument of launchSeuratExplorer().',
+                    color = 'darkgrey', size = 5) +
+  ggplot2::theme_bw() +
+  ggplot2::geom_blank() +
+  ggplot2::theme(axis.title = ggplot2::element_blank(),
+                 axis.text = ggplot2::element_blank(),
+                 axis.ticks = ggplot2::element_blank())
+
+
+# Extract values for the "Gene Based Cluster" module.
+# `name` is either a gene/feature of `assay` or a numeric column of the cell metadata
+# (e.g. a module score added by AddModuleScore). Returns a named numeric vector
+# (names = cell names, NA preserved), or NULL when `name` matches neither.
+get_genecluster_values <- function(obj, name, assay, layer, meta_numeric_columns) {
+  if (name %in% rownames(obj@assays[[assay]])) {
+    expr_df <- Seurat::FetchData(obj, vars = name, assay = assay, layer = layer)
+    vals <- expr_df[[1]]
+    names(vals) <- rownames(expr_df)
+    return(vals)
+  }
+  if (name %in% meta_numeric_columns) {
+    vals <- obj@meta.data[[name]]
+    names(vals) <- rownames(obj@meta.data)
+    return(vals)
+  }
+  return(NULL)
+}
+
+
 
 check_allowed_chars <- function(text_string, allowed_characters = "[^a-z A-Z0-9_+-]") {
   # Returns TRUE if NO forbidden characters are found (meaning only allowed chars are present)
   # allows for letters, numbers, whitespace, -, +, and _
   !grepl(allowed_characters, text_string)
+}
+
+
+
+############################## Gene set scoring (AddModuleScore / AUCell)
+# Single entry point used by the "Module Score" tab.
+# Every method returns the Seurat object with exactly one new numeric metadata
+# column called `name`, plus an `info` list that the UI reports to the user.
+
+score_gene_set_addmodulescore <- function(obj, genes, name, assay = NULL, seed = 1) {
+  if (is.null(assay) || !nzchar(assay)) {
+    assay <- SeuratObject::DefaultAssay(obj)
+  }
+  if (name %in% colnames(obj@meta.data)) {
+    stop("Column '", name, "' already exists in the metadata.", call. = FALSE)
+  }
+  # AddModuleScore writes '<name>1', so that column must be free as well,
+  # otherwise an existing metadata column would be silently overwritten.
+  tmp_name <- name
+  while (paste0(tmp_name, "1") %in% colnames(obj@meta.data)) {
+    tmp_name <- paste0(tmp_name, "_")
+  }
+  full_col_name <- paste0(tmp_name, "1")
+  obj <- Seurat::AddModuleScore(object = obj, features = list(genes),
+                                name = tmp_name, assay = assay, seed = seed)
+  colnames(obj@meta.data)[colnames(obj@meta.data) == full_col_name] <- name
+  list(
+    obj = obj,
+    info = list(method = "addmodulescore", assay = assay,
+                n_genes = length(genes), note = NULL)
+  )
+}
+
+
+# Build AUCell rankings for an assay, reusing a cached copy while the matrix is
+# unchanged. `cache` is an environment owned by the Shiny session: rankings are
+# deliberately kept OUT of the Seurat object because they are large and the app
+# copies the object on every `obj <- ...` assignment.
+get_aucell_rankings <- function(obj, assay, cache = NULL, layer_slot = "data",
+                                splitByBlocks = TRUE) {
+  if (!requireNamespace("AUCell", quietly = TRUE)) {
+    stop("Package 'AUCell' is required. Install it with BiocManager::install(\"AUCell\").",
+         call. = FALSE)
+  }
+
+  note <- NULL
+  layers_available <- tryCatch(SeuratObject::Layers(obj[[assay]]),
+                               error = function(e) character(0))
+  if (identical(layer_slot, "data") && !("data" %in% layers_available)) {
+    layer_slot <- "counts"
+    note <- "This assay has no 'data' layer; AUCell ranked the raw counts instead."
+  }
+
+  mat <- if (identical(layer_slot, "counts")) {
+    get_counts_matrix(obj, assay = assay)
+  } else {
+    get_data_matrix(obj, assay = assay)
+  }
+  if (is.null(mat) || nrow(mat) == 0 || ncol(mat) == 0) {
+    stop("Cannot extract the expression matrix of assay '", assay, "'.", call. = FALSE)
+  }
+
+  cell_names <- colnames(mat)
+  key <- paste(assay, layer_slot, nrow(mat), ncol(mat),
+               cell_names[1], cell_names[length(cell_names)], sep = "|")
+  if (!is.null(cache) && exists(key, envir = cache, inherits = FALSE)) {
+    return(list(rankings = get(key, envir = cache, inherits = FALSE),
+                n_genes = nrow(mat), layer_slot = layer_slot,
+                note = note, cached = TRUE))
+  }
+
+  rankings <- AUCell::AUCell_buildRankings(exprMat = mat, plotStats = FALSE,
+                                           splitByBlocks = splitByBlocks)
+  if (!is.null(cache)) {
+    assign(key, rankings, envir = cache)
+  }
+  list(rankings = rankings, n_genes = nrow(mat), layer_slot = layer_slot,
+       note = note, cached = FALSE)
+}
+
+
+score_gene_set_aucell <- function(obj, genes, name, assay = NULL, auc_pct = 5,
+                                  auc_max_rank = NULL, cache = NULL, seed = 1) {
+  if (is.null(assay) || !nzchar(assay)) {
+    assay <- SeuratObject::DefaultAssay(obj)
+  }
+  if (name %in% colnames(obj@meta.data)) {
+    stop("Column '", name, "' already exists in the metadata.", call. = FALSE)
+  }
+  if (length(genes) == 0) {
+    stop("The gene set is empty after matching against the assay.", call. = FALSE)
+  }
+
+  rk <- get_aucell_rankings(obj = obj, assay = assay, cache = cache,
+                            layer_slot = "data")
+
+  auc_max_rank <- if (is.null(auc_max_rank) || !is.finite(auc_max_rank)) {
+    ceiling((auc_pct / 100) * rk$n_genes)
+  } else {
+    as.integer(auc_max_rank)
+  }
+  auc_max_rank <- as.integer(max(1, min(auc_max_rank, rk$n_genes)))
+
+  # AUCell requires a NAMED list of gene sets: the name becomes the row name
+  # of getAUC(), so reuse the metadata column name.
+  gene_sets <- stats::setNames(list(genes), name)
+  auc <- AUCell::AUCell_calcAUC(geneSets = gene_sets, rankings = rk$rankings,
+                                normAUC = TRUE, aucMaxRank = auc_max_rank)
+  auc_mat <- AUCell::getAUC(auc)
+  # AUCell returns gene sets in rows and cells in columns; stay tolerant about
+  # the orientation instead of silently binding scores to the wrong cells.
+  if (nrow(auc_mat) == 1 && all(colnames(obj) %in% colnames(auc_mat))) {
+    scores <- as.numeric(auc_mat[1, colnames(obj)])
+  } else if (ncol(auc_mat) == 1 && all(colnames(obj) %in% rownames(auc_mat))) {
+    scores <- as.numeric(auc_mat[colnames(obj), 1])
+  } else {
+    stop("Unexpected AUCell result shape (", nrow(auc_mat), " x ", ncol(auc_mat),
+         ") or cell names do not match the object.", call. = FALSE)
+  }
+  if (length(scores) != ncol(obj) || anyNA(scores)) {
+    stop("AUCell did not return a score for every cell.", call. = FALSE)
+  }
+
+  obj@meta.data[[name]] <- scores
+  if (is.null(obj@misc$gene_set_scores)) {
+    obj@misc$gene_set_scores <- list()
+  }
+  obj@misc$gene_set_scores[[name]] <- list(
+    method = "aucell", assay = assay, layer = rk$layer_slot,
+    n_genes = length(genes), genes = genes, auc_max_rank = auc_max_rank,
+    normAUC = TRUE
+  )
+
+  note <- rk$note
+  if (is.null(note) && length(genes) < 30) {
+    note <- "The gene set has fewer than 30 genes; AUCell scores may be noisy."
+  }
+  list(
+    obj = obj,
+    info = list(method = "aucell", assay = assay, n_genes = length(genes),
+                layer = rk$layer_slot, auc_max_rank = auc_max_rank,
+                cached = rk$cached, note = note)
+  )
+}
+
+
+compute_gene_set_score <- function(obj, genes, name,
+                                   method = c("addmodulescore", "aucell"),
+                                   assay = NULL, auc_pct = 5,
+                                   auc_max_rank = NULL, cache = NULL, seed = 1) {
+  method <- match.arg(method)
+  if (identical(method, "aucell")) {
+    score_gene_set_aucell(obj = obj, genes = genes, name = name, assay = assay,
+                          auc_pct = auc_pct, auc_max_rank = auc_max_rank,
+                          cache = cache, seed = seed)
+  } else {
+    score_gene_set_addmodulescore(obj = obj, genes = genes, name = name,
+                                  assay = assay, seed = seed)
+  }
+}
+
+
+# --- cancellable, chunked long-running computations ----------------------
+# Seurat::FindAllMarkers is a loop of FindMarkers() calls, one per cluster.
+# Doing that loop here - one cluster per event-loop tick - keeps the Shiny app
+# responsive so the Cancel button can interrupt a long run. The assembled table
+# is identical to FindAllMarkers(only.pos = TRUE).
+
+find_markers_one_cluster <- function(object, cluster, cluster_col, assay = NULL,
+                                     test.use = "wilcox", logfc.threshold = 0.1,
+                                     min.pct = 0.01, min.diff.pct = -Inf,
+                                     only.pos = TRUE, return.thresh = 0.01) {
+  genes.de <- Seurat::FindMarkers(object = object, assay = assay,
+                                  ident.1 = cluster, ident.2 = NULL,
+                                  group.by = cluster_col, test.use = test.use,
+                                  logfc.threshold = logfc.threshold,
+                                  min.pct = min.pct, min.diff.pct = min.diff.pct,
+                                  only.pos = only.pos, verbose = FALSE)
+  if (is.null(genes.de) || nrow(genes.de) == 0) {
+    return(NULL)
+  }
+  if (identical(test.use, "roc")) {
+    genes.de <- genes.de[genes.de$myAUC > return.thresh |
+                           genes.de$myAUC < (1 - return.thresh), , drop = FALSE]
+  } else {
+    genes.de <- genes.de[order(genes.de$p_val,
+                               -abs(genes.de$pct.1 - genes.de$pct.2)), , drop = FALSE]
+    genes.de <- genes.de[genes.de$p_val < return.thresh, , drop = FALSE]
+  }
+  if (nrow(genes.de) == 0) {
+    return(NULL)
+  }
+  genes.de$cluster <- cluster
+  genes.de$gene <- rownames(genes.de)
+  genes.de
+}
+
+# Same final assembly as Seurat::FindAllMarkers(only.pos = TRUE).
+finalize_find_all_markers <- function(parts) {
+  parts <- parts[!vapply(parts, is.null, logical(1))]
+  if (length(parts) == 0) {
+    return(data.frame())
+  }
+  gde.all <- do.call(rbind, parts)
+  gde.all[gde.all[[2]] > 0, , drop = FALSE]
+}
+
+# Static note for long-running DEG dialogs. Seurat emits a one-time console
+# message when presto is missing; that message used to be picked up by the
+# progress handler and corrupted the progress bar. Show it as a fixed block
+# (below the wait text, above the progress bar) for the whole computation.
+presto_missing_ui <- function() {
+  if (requireNamespace("presto", quietly = TRUE)) {
+    return(NULL)
+  }
+  div(
+    style = paste0("background: #fff3cd; border-left: 4px solid #ffc107; ",
+                   "padding: 8px 10px; margin: 10px 0; font-size: 12px; ",
+                   "line-height: 1.4; color: #856404;"),
+    icon("info-circle", style = "margin-right: 5px;"),
+    tags$strong("presto is not installed."),
+    " The Wilcoxon rank sum test will use Seurat's slower implementation, so this step may take much longer.",
+    tags$br(),
+    tags$code(style = "font-size: 11px;", "install.packages('presto')"),
+    " and restart the app to enable the fast version."
+  )
+}
+
+
+# Consistent "working" modal for long-running analyses.
+# A progress bar and a Cancel button are added only when their ids are supplied.
+# The progress bar is created as `progress_id`; the text line that the update
+# helpers write to is `progress_id` + "_text", so wait_modal() can replace the
+# hand-written dialogs without touching the step functions.
+wait_modal <- function(title, detail = NULL, extra = NULL, note = NULL,
+                       progress_id = NULL, cancel_id = NULL, total = 100) {
+  if (is.null(detail)) detail <- "Please wait, this may take a while..."
+  showModal(modalDialog(
+    title = tagList(icon("hourglass-start", class = "fa-spin"), " ", title),
+    tags$p(detail),
+    extra,
+    if (!is.null(progress_id)) {
+      shinyWidgets::progressBar(id = progress_id, value = 0, total = total,
+                                status = "success", striped = TRUE)
+    },
+    if (!is.null(progress_id)) {
+      tags$p(id = paste0(progress_id, "_text"), align = "center",
+             style = "margin-top: 10px;")
+    },
+    if (!is.null(note)) {
+      tags$small(note, style = "color: #6c757d; display: block; margin-top: 8px;")
+    },
+    footer = if (is.null(cancel_id)) {
+      NULL
+    } else {
+      tagList(actionButton(cancel_id, "Cancel", class = "btn-danger"))
+    },
+    size = "m"
+  ))
+}
+
+# Consistent error dialog: the footer is always "OK", and a raw error message
+# goes into <pre> instead of being pasted into a <p>.
+show_error <- function(title, detail, subtitle = NULL, code = NULL, size = "m") {
+  showModal(modalDialog(
+    title = tagList(icon("exclamation-triangle"), " ", title),
+    tags$div(
+      tags$p(detail),
+      if (!is.null(code)) {
+        tags$pre(style = "color: #dc3545; white-space: pre-wrap;", code)
+      },
+      if (!is.null(subtitle)) {
+        tags$small(style = "color: #6c757d;", subtitle)
+      }
+    ),
+    easyClose = TRUE,
+    footer = modalButton("OK"),
+    size = size
+  ))
+}
+
+
+# One-line provenance shown above result tables, so a result can always be
+# traced back to the analysis and the main parameters that produced it:
+# "2026-10-28 14:05 \u00b7 Cluster markers \u00b7 1234 markers \u00b7 test: wilcox \u00b7 assay: RNA"
+run_info_line <- function(...) {
+  parts <- as.character(unlist(list(...), use.names = FALSE))
+  parts <- parts[!is.na(parts) & nzchar(parts)]
+  paste0(format(Sys.time(), "%Y-%m-%d %H:%M"), "  \u00b7  ",
+         paste(parts, collapse = "  \u00b7  "))
+}
+
+# Remove the scale.data layer from every assay, used by the "Export Data" page
+# to produce a much smaller file when scaled data is not needed downstream.
+# Failures are ignored per assay: an untouched assay only makes the file bigger,
+# it never corrupts the export.
+drop_scale_data <- function(obj) {
+  for (assay_name in Seurat::Assays(obj)) {
+    obj[[assay_name]] <- tryCatch({
+      assay <- obj[[assay_name]]
+      if (inherits(assay, "Assay5")) {
+        layers <- tryCatch(SeuratObject::Layers(assay),
+                           error = function(e) character(0))
+        if ("scale.data" %in% layers) {
+          assay@layers[["scale.data"]] <- NULL
+        }
+      } else if (is(assay, "Assay")) {
+        assay@scale.data <- matrix(numeric(0), nrow = 0, ncol = 0)
+      }
+      assay
+    }, error = function(e) obj[[assay_name]])
+  }
+  obj
+}
+
+# Saved custom colours for one cluster column (named: level -> hex), or NULL.
+get_cluster_color_map <- function(data, col) {
+  if (is.null(col) || is.null(data$cluster_colors)) return(NULL)
+  map <- data$cluster_colors[[col]]
+  if (is.null(map) || length(map) == 0) return(NULL)
+  map
+}
+
+# Expand a partial colour map to every level. Groups without a custom colour
+# keep the default ggplot hue colour for their position, so partial palettes
+# look exactly like the default plot for the untouched groups. The result is
+# ordered like `levels`.
+complete_cluster_colors <- function(map, levels) {
+  n <- length(levels)
+  if (n == 0) return(character(0))
+  defaults <- scales::hue_pal()(n)
+  names(defaults) <- levels
+  if (!is.null(map) && length(map) > 0) {
+    hit <- intersect(names(map), levels)
+    if (length(hit) > 0) defaults[hit] <- unname(map[hit])
+  }
+  defaults
+}
+
+# TRUE for "#RRGGBB" or "#RRGGBBAA".
+is_hex_color <- function(x) {
+  grepl("^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$", x)
+}
+
+# NULL / non-finite / non-positive safe numeric accessor for plot dimensions.
+num_or <- function(x, default) {
+  if (is.null(x) || length(x) != 1L || !is.numeric(x) || !is.finite(x) || x <= 0) {
+    default
+  } else {
+    x
+  }
+}
+
+# Keep the last rendered plot plus the exact pixel size it was drawn at, so the
+# download handler can write the PDF on demand instead of every render paying
+# for a second full plot build (ggsave re-runs the whole ggplot build).
+store_plot <- function(cache, key, plot, width, height) {
+  cache[[key]] <- list(plot = plot, width = width, height = height)
+  invisible(NULL)
+}
+
+# Write a cached ggplot to `file`. Returns FALSE when nothing has been rendered
+# yet, which mirrors the previous "no file to copy" behaviour.
+#
+# ggsave lays the plot out at the page size it is given, so dpi decides whether
+# the page or the content matches the browser:
+#   dpi = 72  -> page is W/72 in: same text/point proportions as the on-screen
+#                plot (Shiny renders at 72 dpi), page 1.33x the screen size.
+#   dpi = 96  -> page is W/96 in: same page size as the screen, but text and
+#                points look 1.33x larger relative to the figure.
+# The mismatch is inherent (72 dpi device shown on a 96 dpi screen); the option
+# lets the user pick which side to match. Default: content, i.e. dpi = 72.
+save_cached_plot <- function(cache, key, file, dpi = getOption("SeuratExplorerPdfDpi", 72)) {
+  cached <- cache[[key]]
+  if (is.null(cached) || is.null(cached$plot)) {
+    return(FALSE)
+  }
+  ggplot2::ggsave(file, cached$plot,
+                  width = num_or(cached$width, 800),
+                  height = num_or(cached$height, 720),
+                  units = "px", dpi = dpi, limitsize = FALSE)
+  TRUE
 }
 
 
@@ -965,7 +1864,6 @@ check_allowed_chars <- function(text_string, allowed_characters = "[^a-z A-Z0-9_
 #' @param icon_name Character string passed to `shiny::icon()`.
 #' @param color Hex color string for the left border and title accent. Default: "#3b82f6".
 #' @param ... UI elements to place inside the collapsible content area.
-#'   Groups always start expanded.
 #'
 #' @import shiny
 #' @return A `shiny.tag` div representing the collapsible parameter group.
@@ -1006,7 +1904,11 @@ create_resizable_plot_ui <- function(plot_id, initial_width = 800, initial_heigh
         border-radius: 8px;
         padding: 20px;
         position: relative;
-        overflow: visible;
+        max-width: 100%;
+        /* A fixed-width plot (800 px by default) must scroll inside its box
+           instead of widening the page on a narrow screen. The resize handles
+           sit within the 20 px padding, so they are not clipped. */
+        overflow: auto;
       ",
     shinyjqui::jqui_resizable(
       div(
@@ -1098,32 +2000,53 @@ create_resizable_plot_ui <- function(plot_id, initial_width = 800, initial_heigh
       ")
       )
     ),
-    # JavaScript to sync plot dimensions with resizable container
+    # JavaScript to sync plot dimensions with the resizable container.
+    # Shiny re-renders a plot whenever the element that hosts it changes size,
+    # so growing that element during a drag re-runs renderPlot() on every drag
+    # step no matter what the app sends. The plot element is therefore frozen
+    # at its current pixel size while the handle is being dragged, and the
+    # final size is applied exactly once when the mouse is released.
     tags$script(HTML(paste0("
         $(function() {
-          var updateDimensions = function() {
-            var container = $('#", plot_id, "_inner');
-            var width = container.width();
-            var height = container.height();
+          var inner  = $('#", plot_id, "_inner');
+          var plotEl = $('#", plot_id, "');
+          var lastW = -1, lastH = -1;
+
+          var applySize = function(width, height) {
+            if (width === lastW && height === lastH) { return; }
+            lastW = width; lastH = height;
+            plotEl.css({ width: width + 'px', height: height + 'px' });
             Shiny.setInputValue('", plot_id, "_width', width, {priority: 'event'});
             Shiny.setInputValue('", plot_id, "_height', height, {priority: 'event'});
           };
 
-          // Initial dimensions
-          updateDimensions();
+          // Initial size: pin the plot element once, so its size is known.
+          // Skip it when the container is not laid out yet (width/height 0),
+          // otherwise the plot would be pinned to a zero-sized box.
+          var initW = Math.round(inner.width()), initH = Math.round(inner.height());
+          if (initW > 0 && initH > 0) {
+            plotEl.css({ width: initW + 'px', height: initH + 'px' });
+            lastW = initW; lastH = initH;
+            Shiny.setInputValue('", plot_id, "_width', initW, {priority: 'event'});
+            Shiny.setInputValue('", plot_id, "_height', initH, {priority: 'event'});
+          }
 
-          // Update on resize
-          var resizeTimer;
-          $('#", plot_id, "_inner').on('resize', function(e, ui) {
-            clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(function() {
-              Shiny.setInputValue('", plot_id, "_width', ui.size.width, {priority: 'event'});
-              Shiny.setInputValue('", plot_id, "_height', ui.size.height, {priority: 'event'});
-            }, 100);
+          // Freeze while dragging: the box grows, the plot does not
+          inner.on('resizestart', function() {
+            var w = plotEl.width(), h = plotEl.height();
+            if (w > 0 && h > 0) {
+              plotEl.css({ width: w + 'px', height: h + 'px' });
+            }
           });
 
-          // Update periodically as a fallback
-          setInterval(updateDimensions, 2000);
+          // Apply the final size once, after the handle is released
+          var resizeTimer;
+          inner.on('resizestop', function() {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function() {
+              applySize(Math.round(inner.width()), Math.round(inner.height()));
+            }, 50);
+          });
         });
       "))
     )
